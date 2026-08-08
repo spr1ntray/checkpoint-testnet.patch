@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# Secrets / local inputs
+input/database.enc
+input/database.salt
+input/private_keys.txt
+input/proxies.txt
+input/capsolver_api_key.txt
+input/*.enc
+input/*.salt
+
+# Runtime
+logs/*
+!logs/.gitkeep
+.DS_Store
+
+# Captures / secrets-adjacent
+*.har
+*.mov
+*.mp4
+*.webm
+
+# OS / IDE
+.idea/
+.vscode/
+*.swp

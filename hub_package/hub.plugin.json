@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "contract_version": "SH-SOFTWARE-0.6/2",
+  "id": "io.sprintray.checkpoint-testnet",
+  "name": "Checkpoint Testnet",
+  "version": "1.1.0",
+  "description": "Фарм Checkpoint XP на Arbitrum Sepolia: inspect, daily fills, deposit и sell offers.",
+  "author": "sprintray",
+  "presentation": {
+    "display_name": "Checkpoint Testnet",
+    "description": "Модуль Soft Hub для Checkpoint testnet (Arbitrum Sepolia). Проверка XP/балансов, daily market fills (до 5/день), oracle deposit и sell offers. Секреты только из Vault. Lifecycle и results — по каждому аккаунту. SIWE/hCaptcha опциональны (можно включить позже с Capsolver).",
+    "assets": {
+      "icon": "assets/icon.png",
+      "image": "assets/image.png"
+    }
+  },
+  "compatibility": {
+    "hub": ">=0.6.3",
+    "python": ">=3.12,<3.13",
+    "os": ["darwin"]
+  },
+  "runtime": {
+    "type": "python",
+    "entrypoint": "plugin.main:run",
+    "protocol": "soft-hub-jsonl/1",
+    "state_model": "externally_reconciled",
+    "requirements": "requirements.txt",
+    "safe_stop": true,
+    "heartbeat_seconds": 15
+  },
+  "permissions": {
+    "secrets": ["evm_private_key", "proxy"],
+    "network": [
+      "arbitrum-sepolia-rpc.publicnode.com",
+      "sepolia-rollup.arbitrum.io",
+      "arbitrum-sepolia.gateway.tenderly.co",
+      "arbitrum-sepolia.public.blastapi.io",
+      "checkpoint-data-market-api.dorimebest.workers.dev",
+      "oracle.checkpoint.exchange",
+      "checkpoint.exchange",
+      "app.dynamicauth.com",
+      "api.capsolver.com"
+    ],
+    "chains": [421614],
+    "financial_risk": "testnet",
+    "browser": false,
+    "local_services": []
+  },
+  "actions": [
+    {
+      "id": "inspect",
+      "name": "Проверить XP и балансы",
+      "description": "Читает ETH, test USDC и Checkpoint XP без транзакций.",
+      "risk": "read",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": ["evm_private_key", "proxy"]
+      },
+      "resources": {
+        "account": ["private_key", "proxy"],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "daily_farm",
+      "name": "Daily farm",
+      "description": "Mint test USDC при необходимости и до 5 market fills (XP cap) в Arbitrum Sepolia.",
+      "risk": "testnet_write",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": ["evm_private_key", "proxy"]
+      },
+      "resources": {
+        "account": ["private_key", "proxy"],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "trades": {
+            "type": "integer",
+            "title": "Количество fills",
+            "description": "Сколько market fills на аккаунт (макс 5/день по XP-правилам).",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 10,
+              "unit": "fills"
+            }
+          },
+          "max_usdc_per_fill": {
+            "type": "number",
+            "title": "Макс. USDC на fill",
+            "description": "Не брать offers дороже этого notional (test USDC).",
+            "minimum": 0.01,
+            "maximum": 5,
+            "default": 2,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 20,
+              "unit": "USDC"
+            }
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Пауза между действиями",
+            "description": "Задержка между mint/approve/fill.",
+            "minimum": 0,
+            "maximum": 60,
+            "default": 8,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 30,
+              "unit": "сек"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "deposit",
+      "name": "Deposit Checkpoint XP",
+      "description": "Oracle deposit authorization + on-chain deposit для pointsId 5 (testnet).",
+      "risk": "testnet_write",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": ["evm_private_key", "proxy"]
+      },
+      "resources": {
+        "account": ["private_key", "proxy"],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "full_cycle",
+      "name": "Полный цикл",
+      "description": "Опциональный deposit attempt + daily market fills в Arbitrum Sepolia.",
+      "risk": "testnet_write",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": ["evm_private_key", "proxy"]
+      },
+      "resources": {
+        "account": ["private_key", "proxy"],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "trades": {
+            "type": "integer",
+            "title": "Количество fills",
+            "description": "Сколько market fills на аккаунт.",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 10,
+              "unit": "fills"
+            }
+          },
+          "max_usdc_per_fill": {
+            "type": "number",
+            "title": "Макс. USDC на fill",
+            "description": "Верхняя граница notional одного fill.",
+            "minimum": 0.01,
+            "maximum": 5,
+            "default": 2,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 20,
+              "unit": "USDC"
+            }
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Пауза между действиями",
+            "description": "Задержка между шагами.",
+            "minimum": 0,
+            "maximum": 60,
+            "default": 8,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 30,
+              "unit": "сек"
+            }
+          },
+          "try_deposit": {
+            "type": "boolean",
+            "title": "Пробовать deposit",
+            "description": "Перед fills запросить oracle deposit (часто skip, если points нет).",
+            "default": false,
+            "x-ui": {
+              "group": "Дополнительно",
+              "order": 100,
+              "advanced": true
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "create_sell",
+      "name": "Создать sell offer",
+      "description": "Создаёт один testnet sell offer для Checkpoint pointsId 5.",
+      "risk": "testnet_write",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": ["evm_private_key", "proxy"]
+      },
+      "resources": {
+        "account": ["private_key", "proxy"],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "points_amount": {
+            "type": "number",
+            "title": "Количество points",
+            "description": "Сколько points выставить в offer.",
+            "minimum": 0.001,
+            "maximum": 1,
+            "default": 0.01,
+            "x-ui": {
+              "group": "Offer",
+              "order": 10
+            }
+          },
+          "price_usdc_per_point": {
+            "type": "number",
+            "title": "Цена USDC за point",
+            "description": "Цена за 1 point в test USDC.",
+            "minimum": 0.01,
+            "maximum": 1000,
+            "default": 50,
+            "x-ui": {
+              "group": "Offer",
+              "order": 20,
+              "unit": "USDC"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "ui": {
+    "accent": "#5B6FC8",
+    "monogram": "CP"
+  }
+}
