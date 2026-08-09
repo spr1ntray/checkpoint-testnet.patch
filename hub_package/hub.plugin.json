@@ -3,12 +3,12 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.4.1",
-  "description": "Checkpoint XP на Arbitrum Sepolia: регистрация по реферальной цепи Hub, парсинг таблицы и daily farm fills.",
+  "version": "1.5.0",
+  "description": "Checkpoint XP на Arbitrum Sepolia: работа (auto-register по реф-цепи + farm) и парсинг.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Регистрация кошельков по топологии рефералов Soft Hub (parent-first), парсинг XP/балансов и daily farm market fills на Arbitrum Sepolia. Код реферала — EVM-адрес parent; manual invite code не нужен.",
+    "description": "Два режима: Работа (новые аккаунты сами садятся на рефералку по топологии Hub, затем farm fills) и Парсинг XP/балансов. Manual invite code не нужен.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
@@ -53,10 +53,10 @@
   },
   "actions": [
     {
-      "id": "register",
-      "name": "Регистрация",
-      "description": "Индексирует кошельки в Checkpoint portfolio и сажает их на реферальные коды по топологии Soft Hub. Уровни идут parent-first: корни и родители раньше детей.",
-      "risk": "external_write",
+      "id": "farm",
+      "name": "Работа",
+      "description": "Новые аккаунты автоматически регистрирует и сажает на parent по топологии Soft Hub (parent-first), затем mint test USDC и market fills (до 5/день). Если аккаунт уже на чужом referrer — пишет в лог и фармит дальше.",
+      "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
         "secrets": [
@@ -82,53 +82,60 @@
           "account": []
         }
       },
-      "output": {
-        "mode": "account_table",
-        "title": "Регистрация и рефералы",
-        "primary_kind": "register_result",
-        "columns": [
-          {
-            "key": "is_root",
-            "title": "Корень",
-            "type": "boolean"
-          },
-          {
-            "key": "has_parent",
-            "title": "Есть parent",
-            "type": "boolean"
-          },
-          {
-            "key": "referral_status",
-            "title": "Статус реферала",
-            "type": "string"
-          },
-          {
-            "key": "already_linked",
-            "title": "Уже был",
-            "type": "boolean"
-          },
-          {
-            "key": "portfolio",
-            "title": "Portfolio",
-            "type": "boolean"
-          }
-        ]
-      },
       "options": {
         "type": "object",
         "properties": {
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей одного уровня обрабатывать одновременно. Между уровнями — barrier (родители раньше детей).",
-            "default": 5,
+            "description": "Сколько профилей одного уровня обрабатывать одновременно. Между уровнями реф-цепи — barrier.",
+            "default": 3,
             "minimum": 1,
-            "maximum": 20,
+            "maximum": 10,
             "multipleOf": 1,
             "x-ui": {
               "group": "Выполнение",
               "order": 0,
               "unit": "аккаунтов"
+            }
+          },
+          "trades": {
+            "type": "integer",
+            "title": "Количество fills",
+            "description": "Сколько market fills на аккаунт (макс 5/день по XP-правилам).",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 10,
+              "unit": "fills"
+            }
+          },
+          "max_usdc_per_fill": {
+            "type": "number",
+            "title": "Макс. USDC на fill",
+            "description": "Не брать offers дороже этого notional.",
+            "minimum": 0.01,
+            "maximum": 5,
+            "default": 2,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 20,
+              "unit": "USDC"
+            }
+          },
+          "delay_seconds": {
+            "type": "number",
+            "title": "Пауза между действиями",
+            "description": "Задержка между mint/approve/fill на одном аккаунте.",
+            "minimum": 0,
+            "maximum": 60,
+            "default": 8,
+            "x-ui": {
+              "group": "Фарм",
+              "order": 30,
+              "unit": "сек"
             }
           }
         },
@@ -216,86 +223,6 @@
               "group": "Выполнение",
               "order": 0,
               "unit": "аккаунтов"
-            }
-          }
-        },
-        "required": [],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "farm",
-      "name": "Фарм",
-      "description": "Mint test USDC при необходимости и market fills (до 5/день) в Arbitrum Sepolia.",
-      "risk": "testnet_write",
-      "account_mode": "one_or_more",
-      "permissions": {
-        "secrets": [
-          "evm_private_key",
-          "proxy"
-        ]
-      },
-      "resources": {
-        "account": [
-          "private_key",
-          "proxy"
-        ],
-        "settings": []
-      },
-      "options": {
-        "type": "object",
-        "properties": {
-          "account_concurrency": {
-            "type": "integer",
-            "title": "Параллельные аккаунты",
-            "description": "Сколько профилей обрабатывать одновременно внутри одного запуска.",
-            "default": 3,
-            "minimum": 1,
-            "maximum": 10,
-            "multipleOf": 1,
-            "x-ui": {
-              "group": "Выполнение",
-              "order": 0,
-              "unit": "аккаунтов"
-            }
-          },
-          "trades": {
-            "type": "integer",
-            "title": "Количество fills",
-            "description": "Сколько market fills на аккаунт (макс 5/день по XP-правилам).",
-            "minimum": 1,
-            "maximum": 5,
-            "default": 5,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 10,
-              "unit": "fills"
-            }
-          },
-          "max_usdc_per_fill": {
-            "type": "number",
-            "title": "Макс. USDC на fill",
-            "description": "Не брать offers дороже этого notional.",
-            "minimum": 0.01,
-            "maximum": 5,
-            "default": 2,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 20,
-              "unit": "USDC"
-            }
-          },
-          "delay_seconds": {
-            "type": "number",
-            "title": "Пауза между действиями",
-            "description": "Задержка между mint/approve/fill на одном аккаунте.",
-            "minimum": 0,
-            "maximum": 60,
-            "default": 8,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 30,
-              "unit": "сек"
             }
           }
         },
