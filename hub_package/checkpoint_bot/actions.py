@@ -152,19 +152,42 @@ class WalletActionRunner:
             usdc = None
         try:
             xp = fetch_rewards(c, self.cfg)
-            xp_details = {"xp": xp.total_points, "summary": xp.summary()}
+            bd = xp.breakdown
+            xp_details = {
+                "xp": float(xp.total_points),
+                "base_xp": float(bd.get("baseWalletPoints", 0) or 0),
+                "buy_xp": float(bd.get("buyPoints", 0) or 0),
+                "sell_xp": float(bd.get("sellPoints", 0) or 0),
+                "deposit_xp": float(bd.get("depositPoints", 0) or 0),
+                "rank": int(xp.rank) if xp.rank is not None else None,
+                "summary": xp.summary(),
+            }
+            status = "ok"
         except Exception as exc:
-            xp_details = {"error": str(exc)[:200]}
+            xp_details = {
+                "xp": 0.0,
+                "base_xp": 0.0,
+                "buy_xp": 0.0,
+                "sell_xp": 0.0,
+                "deposit_xp": 0.0,
+                "rank": None,
+                "error": str(exc)[:200],
+            }
+            status = "failed"
         self.emit(
             {
                 "label": c.label,
                 "address": c.address,
                 "action": "parse",
-                "status": "ok",
+                "status": status,
                 "tx_hash": None,
                 "details": {
-                    "eth": str(eth),
-                    "usdc": str(usdc) if usdc is not None else None,
+                    "eth": f"{eth:.8f}".rstrip("0").rstrip("."),
+                    "usdc": (
+                        f"{usdc:.6f}".rstrip("0").rstrip(".")
+                        if usdc is not None
+                        else "0"
+                    ),
                     **xp_details,
                 },
             }
@@ -199,7 +222,9 @@ class WalletActionRunner:
     def _ensure_gas(self) -> bool:
         c = self.client
         eth = c.eth_balance()
-        if eth < self.cfg.min_eth_balance:
+        # Arbitrum Sepolia fills are cheap; keep a low floor so dust wallets still try.
+        need = self.cfg.min_eth_balance
+        if eth < need:
             self.emit(
                 {
                     "label": c.label,
@@ -208,8 +233,9 @@ class WalletActionRunner:
                     "status": "skipped",
                     "tx_hash": None,
                     "details": {
-                        "eth": str(eth),
-                        "need": str(self.cfg.min_eth_balance),
+                        "reason": "low_gas",
+                        "eth": f"{eth:.9f}",
+                        "need": f"{need:.9f}",
                         "hint": "Пополни ETH на Arbitrum Sepolia",
                     },
                 }

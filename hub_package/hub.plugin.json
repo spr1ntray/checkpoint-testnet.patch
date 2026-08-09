@@ -3,19 +3,19 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.2.0",
-  "description": "Фарм Checkpoint XP на Arbitrum Sepolia: inspect, daily fills, deposit и sell offers с параллельными аккаунтами.",
+  "version": "1.3.0",
+  "description": "Checkpoint XP на Arbitrum Sepolia: парсинг таблицы и daily farm fills.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Модуль Soft Hub для Checkpoint testnet (Arbitrum Sepolia). Проверка XP/балансов, daily market fills (до 5/день), oracle deposit и sell offers. Параллельная обработка аккаунтов через account_concurrency. Секреты только из Vault. Lifecycle и results — по каждому аккаунту.",
+    "description": "Парсинг XP/балансов в таблицу Soft Hub и daily farm market fills на Arbitrum Sepolia. Параллельные аккаунты, секреты из Vault, только два действия: парсинг и фарм.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
     }
   },
   "compatibility": {
-    "hub": ">=0.6.5",
+    "hub": ">=0.6.8",
     "python": ">=3.12,<3.13",
     "os": [
       "darwin"
@@ -42,9 +42,7 @@
       "arbitrum-sepolia.public.blastapi.io",
       "checkpoint-data-market-api.dorimebest.workers.dev",
       "oracle.checkpoint.exchange",
-      "checkpoint.exchange",
-      "app.dynamicauth.com",
-      "api.capsolver.com"
+      "checkpoint.exchange"
     ],
     "chains": [
       421614
@@ -56,8 +54,8 @@
   "actions": [
     {
       "id": "inspect",
-      "name": "Проверить XP и балансы",
-      "description": "Читает ETH, test USDC и Checkpoint XP без транзакций.",
+      "name": "Парсинг",
+      "description": "Читает ETH, test USDC и Checkpoint XP; показывает таблицу по аккаунтам.",
       "risk": "read",
       "account_mode": "one_or_more",
       "permissions": {
@@ -73,13 +71,59 @@
         ],
         "settings": []
       },
+      "output": {
+        "mode": "account_table",
+        "title": "Checkpoint XP и балансы",
+        "primary_kind": "account_snapshot",
+        "columns": [
+          {
+            "key": "xp_total",
+            "title": "XP всего",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "xp_buy",
+            "title": "XP buy",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "xp_deposit",
+            "title": "XP deposit",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "rank",
+            "title": "Ранг",
+            "type": "integer",
+            "aggregate": "avg"
+          },
+          {
+            "key": "xp_sell",
+            "title": "XP sell",
+            "type": "integer"
+          },
+          {
+            "key": "eth",
+            "title": "ETH",
+            "type": "decimal_string"
+          },
+          {
+            "key": "usdc",
+            "title": "USDC",
+            "type": "decimal_string"
+          }
+        ]
+      },
       "options": {
         "type": "object",
         "properties": {
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "description": "Сколько профилей обрабатывать одновременно внутри одного запуска.",
             "default": 5,
             "minimum": 1,
             "maximum": 20,
@@ -96,9 +140,9 @@
       }
     },
     {
-      "id": "daily_farm",
-      "name": "Daily farm",
-      "description": "Mint test USDC при необходимости и до 5 market fills (XP cap) в Arbitrum Sepolia.",
+      "id": "farm",
+      "name": "Фарм",
+      "description": "Mint test USDC при необходимости и market fills (до 5/день) в Arbitrum Sepolia.",
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
@@ -120,7 +164,7 @@
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "description": "Сколько профилей обрабатывать одновременно внутри одного запуска.",
             "default": 3,
             "minimum": 1,
             "maximum": 10,
@@ -147,7 +191,7 @@
           "max_usdc_per_fill": {
             "type": "number",
             "title": "Макс. USDC на fill",
-            "description": "Не брать offers дороже этого notional (test USDC).",
+            "description": "Не брать offers дороже этого notional.",
             "minimum": 0.01,
             "maximum": 5,
             "default": 2,
@@ -174,208 +218,10 @@
         "required": [],
         "additionalProperties": false
       }
-    },
-    {
-      "id": "deposit",
-      "name": "Deposit Checkpoint XP",
-      "description": "Oracle deposit authorization + on-chain deposit для pointsId 5 (testnet).",
-      "risk": "testnet_write",
-      "account_mode": "one_or_more",
-      "permissions": {
-        "secrets": [
-          "evm_private_key",
-          "proxy"
-        ]
-      },
-      "resources": {
-        "account": [
-          "private_key",
-          "proxy"
-        ],
-        "settings": []
-      },
-      "options": {
-        "type": "object",
-        "properties": {
-          "account_concurrency": {
-            "type": "integer",
-            "title": "Параллельные аккаунты",
-            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
-            "default": 2,
-            "minimum": 1,
-            "maximum": 10,
-            "multipleOf": 1,
-            "x-ui": {
-              "group": "Выполнение",
-              "order": 0,
-              "unit": "аккаунтов"
-            }
-          }
-        },
-        "required": [],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "full_cycle",
-      "name": "Полный цикл",
-      "description": "Опциональный deposit attempt + daily market fills в Arbitrum Sepolia.",
-      "risk": "testnet_write",
-      "account_mode": "one_or_more",
-      "permissions": {
-        "secrets": [
-          "evm_private_key",
-          "proxy"
-        ]
-      },
-      "resources": {
-        "account": [
-          "private_key",
-          "proxy"
-        ],
-        "settings": []
-      },
-      "options": {
-        "type": "object",
-        "properties": {
-          "account_concurrency": {
-            "type": "integer",
-            "title": "Параллельные аккаунты",
-            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
-            "default": 3,
-            "minimum": 1,
-            "maximum": 10,
-            "multipleOf": 1,
-            "x-ui": {
-              "group": "Выполнение",
-              "order": 0,
-              "unit": "аккаунтов"
-            }
-          },
-          "trades": {
-            "type": "integer",
-            "title": "Количество fills",
-            "description": "Сколько market fills на аккаунт.",
-            "minimum": 1,
-            "maximum": 5,
-            "default": 5,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 10,
-              "unit": "fills"
-            }
-          },
-          "max_usdc_per_fill": {
-            "type": "number",
-            "title": "Макс. USDC на fill",
-            "description": "Верхняя граница notional одного fill.",
-            "minimum": 0.01,
-            "maximum": 5,
-            "default": 2,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 20,
-              "unit": "USDC"
-            }
-          },
-          "delay_seconds": {
-            "type": "number",
-            "title": "Пауза между действиями",
-            "description": "Задержка между шагами на одном аккаунте.",
-            "minimum": 0,
-            "maximum": 60,
-            "default": 8,
-            "x-ui": {
-              "group": "Фарм",
-              "order": 30,
-              "unit": "сек"
-            }
-          },
-          "try_deposit": {
-            "type": "boolean",
-            "title": "Пробовать deposit",
-            "description": "Перед fills запросить oracle deposit (часто skip, если points нет).",
-            "default": false,
-            "x-ui": {
-              "group": "Дополнительно",
-              "order": 100,
-              "advanced": true
-            }
-          }
-        },
-        "required": [],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "create_sell",
-      "name": "Создать sell offer",
-      "description": "Создаёт один testnet sell offer для Checkpoint pointsId 5.",
-      "risk": "testnet_write",
-      "account_mode": "one_or_more",
-      "permissions": {
-        "secrets": [
-          "evm_private_key",
-          "proxy"
-        ]
-      },
-      "resources": {
-        "account": [
-          "private_key",
-          "proxy"
-        ],
-        "settings": []
-      },
-      "options": {
-        "type": "object",
-        "properties": {
-          "account_concurrency": {
-            "type": "integer",
-            "title": "Параллельные аккаунты",
-            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
-            "default": 2,
-            "minimum": 1,
-            "maximum": 10,
-            "multipleOf": 1,
-            "x-ui": {
-              "group": "Выполнение",
-              "order": 0,
-              "unit": "аккаунтов"
-            }
-          },
-          "points_amount": {
-            "type": "number",
-            "title": "Количество points",
-            "description": "Сколько points выставить в offer.",
-            "minimum": 0.001,
-            "maximum": 1,
-            "default": 0.01,
-            "x-ui": {
-              "group": "Offer",
-              "order": 10
-            }
-          },
-          "price_usdc_per_point": {
-            "type": "number",
-            "title": "Цена USDC за point",
-            "description": "Цена за 1 point в test USDC.",
-            "minimum": 0.01,
-            "maximum": 1000,
-            "default": 50,
-            "x-ui": {
-              "group": "Offer",
-              "order": 20,
-              "unit": "USDC"
-            }
-          }
-        },
-        "required": [],
-        "additionalProperties": false
-      }
     }
   ],
   "ui": {
-    "accent": "#5B6FC8",
+    "accent": "#B9856A",
     "monogram": "CP"
   }
 }
