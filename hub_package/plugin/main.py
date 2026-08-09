@@ -607,8 +607,14 @@ def _run_account(
 def _build_config(context: HubContext) -> AppConfig:
     options = context.options or {}
     delay = _clamp_float(options.get("delay_seconds", 8), 0.0, 60.0, 8.0)
+    # Checkpoint XP: +5 per trade, max 5 trades/day → 25 XP daily cap (UI: "25 XP daily cap").
     trades = int(_clamp_float(options.get("trades", 5), 1, 5, 5))
-    max_usdc = Decimal(str(_clamp_float(options.get("max_usdc_per_fill", 2), 0.01, 5.0, 2.0)))
+    # Per-fill notional is independent of XP: bigger fill ≠ more XP. Soft default
+    # raised so offers within the ~$500/day testnet buy budget can be taken.
+    max_usdc = Decimal(str(_clamp_float(options.get("max_usdc_per_fill", 100), 0.01, 500.0, 100.0)))
+    # Mint enough test USDC for a full day of fills under the notional cap.
+    mint_floor = max(Decimal("50"), max_usdc * Decimal(str(trades)))
+    mint_amount = min(Decimal("500"), mint_floor)
 
     return AppConfig(
         max_workers=1,
@@ -636,8 +642,8 @@ def _build_config(context: HubContext) -> AppConfig:
         trades_per_day=trades,
         trade_usdc_min=Decimal("0.01"),
         trade_usdc_max=max_usdc,
-        mint_usdc_if_below=Decimal("5"),
-        mint_usdc_amount=Decimal("50"),
+        mint_usdc_if_below=min(Decimal("50"), max_usdc),
+        mint_usdc_amount=mint_amount,
         prefer_full_fill=True,
         deposit_enabled=False,
         deposit_points_ids=[5],

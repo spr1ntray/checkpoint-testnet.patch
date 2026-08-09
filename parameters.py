@@ -41,11 +41,11 @@ REQUEST_TIMEOUT = 45
 
 # ---------- FARM ----------
 POINTS_ID = 5
-TRADES_PER_DAY = 5
+TRADES_PER_DAY = 5          # XP cap: +5 XP / trade, max 5/day
 TRADE_USDC_MIN = "0.01"
-TRADE_USDC_MAX = "2.0"
-MINT_USDC_IF_BELOW = "5"
-MINT_USDC_AMOUNT = "50"
+TRADE_USDC_MAX = "100"      # notional; XP does not scale with size (testnet buy budget ~$500/day)
+MINT_USDC_IF_BELOW = "50"
+MINT_USDC_AMOUNT = "500"
 PREFER_FULL_FILL = True
 
 # ---------- DEPOSIT ----------
