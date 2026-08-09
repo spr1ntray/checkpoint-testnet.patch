@@ -39,9 +39,6 @@ class CheckpointClient:
         self.label = account.label
         self.proxy = account.proxy
 
-    def __repr__(self) -> str:
-        return f"CheckpointClient(label={self.label!r}, address={self.address})"
-
         self.http = requests.Session()
         self.http.headers.update(
             {
@@ -59,6 +56,9 @@ class CheckpointClient:
         )
         self._usdc_decimals: int | None = None
         self.jwt: str | None = None
+
+    def __repr__(self) -> str:
+        return f"CheckpointClient(label={self.label!r}, address={self.address})"
 
     def _rpc_urls(self) -> list[str]:
         urls = [self.cfg.rpc_url, *self.cfg.rpc_fallbacks]
