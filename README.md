@@ -4,11 +4,14 @@
 
 ## Soft Hub (основной путь)
 
-Готовый пакет:
+Готовый пакет (Patch Radar / GitHub Release):
 
 ```text
-dist/checkpoint-testnet-1.1.0.softhub.zip
+dist/checkpoint-testnet-1.2.0.softhub.zip
 ```
+
+Repo: https://github.com/spr1ntray/checkpoint-testnet.patch  
+Latest release: https://github.com/spr1ntray/checkpoint-testnet.patch/releases/latest
 
 ### Установка
 
@@ -34,11 +37,12 @@ dist/checkpoint-testnet-1.1.0.softhub.zip
 ```bash
 python3 /Users/sprintray/codex_soft/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.1.0.softhub.zip
+  dist/checkpoint-testnet-1.2.0.softhub.zip
 ```
 
 Исходники пакета: `hub_package/`  
-Контракт: `hub_docs/SOFTWARE_SPEC_RU.md` (`SH-SOFTWARE-0.6/2`)
+Контракт: `docs_hub/SOFTWARE_SPEC_RU.md` (`SH-SOFTWARE-0.6/3`)  
+Параллельность: option **Параллельные аккаунты** (`account_concurrency`) + `context.map_accounts()`
 
 ## CLI (legacy / отладка)
 

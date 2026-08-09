@@ -1,11 +1,11 @@
 # Безопасность Soft Hub MVP
 
-Этот документ описывает фактическую модель безопасности Soft Hub `0.6.4`. Это не заявление об аудите и не гарантия сохранности средств. Текущий desktop build — локальный preview для одного оператора и доверенных плагинов, а не публичный production-релиз; использование ценных mainnet-ключей до независимого аудита не рекомендуется.
+Этот документ описывает фактическую модель безопасности Soft Hub `0.6.5`. Это не заявление об аудите и не гарантия сохранности средств. Текущий desktop build — локальный preview для одного оператора и доверенных плагинов, а не публичный production-релиз; использование ценных mainnet-ключей до независимого аудита не рекомендуется.
 
 ## Коротко
 
 - Hub слушает только `127.0.0.1` и защищает API случайным токеном текущего запуска.
-- Account secrets, включая email password, Twitter, AdsPower profile ID, собственный/внешний referral code и связь с account-реферером, а также глобальные Capsolver/AdsPower API keys зашифрованы в SQLite с помощью AES-256-GCM; ключ получается из мастер-пароля через scrypt.
+- Account secrets, включая email password, Twitter, AdsPower profile ID и ссылку `child → direct parent`, а также глобальные Capsolver/AdsPower API keys зашифрованы в SQLite с помощью AES-256-GCM; ключ получается из мастер-пароля через scrypt. Hub не просит и не сохраняет project referral codes; после plugin fetch exact value лишь кратко проходит через память host в неперсистируемом `protect_secret` control-frame.
 - Закрытый Vault скрывает account/run/account-state/result/event/log projections и configured-статусы глобальных ключей; renderer очищает защищённый client cache. Остаются только безопасные aggregate counts активных/требующих внимания runs.
 - Plaintext export требует открытый Vault, повторную проверку мастер-пароля и точную фразу `EXPORT PLAINTEXT SECRETS`; Excel-safe XLSX не исполняет formula-like ячейки, но скачанный файл всё равно больше не защищён Vault.
 - Плагин получает только типы секретов из exact grant выбранного action; обязательные `actions[].resources` проверяются до создания subprocess.
@@ -25,7 +25,7 @@ Hub защищает следующие активы от случайной у�
 - Twitter credentials;
 - глобальный Capsolver API key;
 - AdsPower profile ID и глобальный AdsPower API key;
-- собственные referral codes, внешние referrer codes и связи между Hub-аккаунтами;
+- зашифрованная топология связей между Hub-аккаунтами и project-specific referral codes, которые доверенный плагин получает и временно держит в памяти plugin/host текущего run;
 - мастер-пароль и производный ключ vault;
 - история запусков, результаты и локальная конфигурация;
 - целостность установленного содержимого пакета относительно его `hub.checksums.json`.
@@ -58,7 +58,9 @@ MVP не защищает от администратора/root, malware под
 
 ### Что хранится зашифрованно
 
-Для каждого аккаунта Hub сериализует `evm_private_key`, полный proxy, email, email password, Twitter, AdsPower profile ID, `referral_code`, `referrer_account_id` и `external_referrer_code` в один JSON payload и шифрует его `AESGCM` со случайным 12-byte nonce. Associated data привязывает ciphertext к ID аккаунта и версии формата. Подмена или повреждение ciphertext приводит к ошибке аутентификации. Referral code после trim имеет длину `4..2048` и не содержит control-символы.
+Для каждого аккаунта Hub сериализует `evm_private_key`, полный proxy, email, email password, Twitter, AdsPower profile ID и единственное реферальное поле `referrer_account_id` в один JSON payload и шифрует его `AESGCM` со случайным 12-byte nonce. Associated data привязывает ciphertext к ID аккаунта и версии формата. Подмена или повреждение ciphertext приводит к ошибке аутентификации.
+
+При первом успешном unlock после обновления Hub одноразово расшифровывает все account payloads, удаляет legacy-поля `referral_code` и `external_referrer_code`, сохраняет только валидные `referrer_account_id`, проверяет весь граф и заново шифрует payloads в одной транзакции. Migration marker не ставится до полного успеха. Это намеренный безвозвратный scrub старых кодов.
 
 Глобальные Capsolver и AdsPower API keys хранятся отдельно в `vault_secrets`, каждый шифруется тем же derived key с отдельным nonce и AAD, привязанным к имени секрета. Каждый API key должен содержать минимум `4` символа: это fail-closed граница для корректной exact-value redaction, а не оценка силы ключа. При открытом Vault Bootstrap/UI возвращают только `capsolver_configured` и `adspower_api_configured`; при закрытом — `null`, чтобы не раскрывать даже факт настройки. Значение выдаётся run только при соответствующем exact action grant.
 
@@ -97,7 +99,7 @@ Renderer при lock синхронно очищает собственные м
 
 В MVP нет смены мастер-пароля, recovery key или встроенного зашифрованного backup/restore Vault. Потерянный пароль восстановить нельзя. Для нового мастер-пароля нужен новый data directory и повторный импорт из отдельного доверенного источника.
 
-Блок реферальных связей редактируется bulk-запросом в одной SQLite-транзакции. Backend сначала расшифровывает и проверяет весь граф, отклоняет self-reference, несуществующего parent и любой цикл, и только затем перешифровывает все изменённые rows. Неудача откатывает весь batch. List API возвращает только kind/parent label/configured flags/child count, но не referral codes. Повторный импорт уже известного private key сохраняет эти поля; удаление parent-аккаунта атомарно очищает связь у его прямых children.
+Блок реферальных связей редактируется полным `child_account_id → parent_account_id|null` batch в одной SQLite-транзакции. Backend требует ровно одну запись на каждый текущий account, отклоняет duplicate/unknown/self-reference и любой цикл. `expected_revision` сравнивается через constant-time CAS до записи: устаревший UI не затирает параллельное изменение. Неудача откатывает весь batch. List API возвращает только safe parent ID/label, depth, root flag и child count. Повторный импорт известного private key сохраняет parent-связь; удаление parent-аккаунта атомарно очищает связь у его прямых children.
 
 ### Plaintext account export
 
@@ -107,7 +109,7 @@ Export аккаунтов — явная declassification-операция, а �
 2. Повторно введённый мастер-пароль проходит verifier.
 3. Acknowledgement в точности равен `EXPORT PLAINTEXT SECRETS`.
 
-Ответ имеет `Cache-Control: no-store`; account export может содержать `adspower_profile`, поэтому считается plaintext secret export целиком. Глобальные Capsolver/AdsPower API keys, email passwords, referral codes и связи не экспортируются. Поэтому этот plaintext-файл одновременно опасен как declassified subset и недостаточен как backup: повторный импорт в новый Vault не восстановит реферальную сеть. Эти проверки не защищают уже созданный plaintext-файл: его нельзя коммитить, отправлять в чат или оставлять в незашифрованном Downloads.
+Ответ имеет `Cache-Control: no-store`; account export может содержать `adspower_profile`, поэтому считается plaintext secret export целиком. Глобальные Capsolver/AdsPower API keys, email passwords и топология связей не экспортируются; реферальные коды Hub не persist-ит. Поэтому этот plaintext-файл одновременно опасен как declassified subset и недостаточен как backup: повторный импорт в новый Vault не восстановит реферальную сеть. Эти проверки не защищают уже созданный plaintext-файл: его нельзя коммитить, отправлять в чат или оставлять в незашифрованном Downloads.
 
 На POSIX Hub пытается создать data directory с mode `0700`, а базу и файлы пакета — с ограниченными mode. На Windows используются ACL, унаследованные от профиля пользователя; отдельная настройка ACL кодом не выполняется.
 
@@ -146,7 +148,7 @@ TLS и пользовательская аутентификация отсут�
 
 ### GitHub Release и Patch Radar
 
-Обычная GitHub-установка и Patch Radar в 0.6.4 работают только с public GitHub-данными без token/Authorization. Private repositories не видны, а tokens/credentials в URL отклоняются. Это также означает анонимные GitHub API rate limits.
+Обычная GitHub-установка и Patch Radar в 0.6.5 работают только с public GitHub-данными без token/Authorization. Private repositories не видны, а tokens/credentials в URL отклоняются. Это также означает анонимные GitHub API rate limits.
 
 Patch Radar принимает только username или точный HTTPS owner URL, читает не более первых 100 public repositories с `api.github.com`, отбирает точный case-insensitive суффикс `.patch` и читает только `releases/latest`. Ready-статус возможен лишь при ровно одном release asset с case-insensitive суффиксом `.softhub` или `.softhub.zip` и безопасной GitHub download URL того же owner/repository. Ранняя metadata-проверка требует, чтобы `asset.size` был целым числом от 1 byte до 256 MB, а `browser_download_url` — строкой не длиннее 2048 символов.
 
@@ -173,7 +175,9 @@ Patch Radar принимает только username или точный HTTPS o
 
 Устанавливайте плагин только если вы готовы выполнить его код с правами своего пользователя и выдать ему все заявленные секреты. Проверяйте не только исходники архива, но и каждую зависимость `requirements.txt`: команда **Подготовить** запускает `pip install`, а install hooks и импортируемые пакеты являются частью trust boundary.
 
-С Hub 0.6.4 referral-aware action использует exact grants `referral_code` и/или `referrer_code` и точно совпадающие account resources `referral_code`/или `referrer`. Второй grant не раскрывает структуру графа: runner разрешает effective referrer в сам код в момент запуска. Manifest с этими grants обязан иметь `compatibility.hub >=0.6.4`; наличие grant не создаёт sandbox и не заменяет ручную проверку плагина.
+Referral-aware action контракта `SH-SOFTWARE-0.6/3` объявляет `action.referral.mode: "project_runtime"`, `parent_required`, `parent_access` и отдельные exact `permissions.secrets`/`resources.account` для direct parent. Legacy-имена `referral_code`, `referrer_code`, resources `referral_code`/`referrer` запрещены; любые options, которые по имени или смыслу просят ручной referral/invite code, запрещены глобально во всём `/3`, даже без `action.referral`. Runner фиксирует топологический revision при admission, выдаёт только уникальных direct parents выбранных targets и только объявленные для parent секреты. `parent_access: "exclusive"` добавляет service-lease; `shared_read` его не создаёт. Targets и выданные parents записываются в `run_account_pins`, поэтому их нельзя удалить до завершения run. Это exact grant данных, но не OS sandbox.
+
+Плагин берёт parent только из `context.referrals.parent_for(child.id)` или bounded набора `context.referrals.parents`, сам авторизует его в целевом проекте и получает project-specific code. Сразу после получения и до любых log/result/exception/`print` он обязан вызвать `context.protect_secret(code)`. Exact value передаётся как неперсистируемый control-frame: он кратко находится в памяти plugin/host текущего run и регистрируется в Redactor, но не входит во входной context/options и не сохраняется как event, result, summary, exception, URL, файл или cache. Bootstrap после decode также оборачивает plugin stderr/redirected stdout локальным `context.sanitize_text`, снижая риск race между frame и случайным `print`; это не защищает вывод до вызова, split/custom encoding, screenshots, files или сеть. Raw `print`/logging кода всегда запрещён.
 
 ## Запуски, остановка и журналы
 
@@ -195,9 +199,11 @@ Force-stop является отдельной разрушительной оп
 
 Пакетный запуск принимает пачку только одним backend-запросом: mainnet actions запрещены, options и подтверждения проверяются для каждого элемента, write-leases резервируются в одной транзакции, а persistent idempotency key предотвращает дубли после неопределённого сетевого ответа. Пачка либо целиком поставлена в очередь, либо не создаёт ни одного run. Эта атомарность относится к admission в Hub; уже запущенные внешние операции общей транзакцией не становятся.
 
+Hub разделяет concurrency двух уровней. Глобальный `--max-concurrent` ограничивает число plugin subprocess, а reserved action option `account_concurrency` — workers внутри одного subprocess. Core валидирует integer и зажимает effective value по числу targets; manifest ограничен 20 для HTTP/API и 5 для `browser: true`. Это не rate limiter и не nonce manager: плагин всё равно обязан учитывать provider limits, per-account изоляцию, finite timeouts, cancellation и thread safety своих clients/cache.
+
 При штатном shutdown Hub сначала прекращает admission, сигналит активным plugin processes, ждёт grace period и принудительно завершает оставшиеся до lock Vault. На POSIX дополнительно очищается process group descendants. Полноценного Windows Job Object в MVP нет, поэтому гарантии для отделившихся Windows descendants слабее.
 
-Redactor получает точные значения и account bundles, и `HubSettings`, затем заменяет выданные секреты, secret-поля вложенных объектов, authorization/cookie headers, email, password/token/API-key assignments и строки, похожие на EVM private key, JWT, proxy или длинный credential. Он также ограничивает глубину, количество элементов и длину сообщений. Технический журнал скачивается только через token-authenticated API как один bounded UTF-8 JSONL-файл конкретного run: он содержит общий поток всех аккаунтов с безопасными account labels, но не manifest/options; сохранённые события повторно проходят redaction непосредственно перед export. Ответ имеет `Cache-Control: no-store`.
+Redactor получает точные значения и account bundles, и `HubSettings`, затем заменяет выданные секреты, secret-поля вложенных объектов, authorization/cookie headers, email, password/token/API-key assignments и строки, похожие на EVM private key, JWT, proxy или длинный credential. Project runtime values регистрируются только после `protect_secret`; bootstrap дополнительно очищает последующие text/binary writes через обёртку stderr. Он также ограничивает глубину, количество элементов и длину сообщений. Технический журнал скачивается только через token-authenticated API как один bounded UTF-8 JSONL-файл конкретного run: он содержит общий поток всех аккаунтов с безопасными account labels, но не manifest/options; сохранённые события повторно проходят redaction непосредственно перед export. Ответ имеет `Cache-Control: no-store`.
 
 Это всё ещё best effort, а не DLP: Redactor не обнаружит все кодировки, фрагменты, хэши, файлы, изображения или нестандартно разбитые секреты. Плагин обязан никогда не помещать secrets в `message`, `data`, exception text, имя файла или собственные логи. Скачанный `.log` остаётся чувствительным артефактом истории и не должен публиковаться без проверки.
 
@@ -223,7 +229,7 @@ Scratch-каталог сохраняется после run. Если плаг�
 1. Остановите активные runs, завершите Hub и, если эксфильтрация еще возможна, отключите сеть машины.
 2. Считайте скомпрометированными все секреты, выданные плагину, а при компрометации OS-пользователя — весь vault после последнего unlock.
 3. Для EVM-ключа переведите активы и полномочия на новый кошелек; отзовите token approvals, sessions и делегированные права. Одной смены мастер-пароля недостаточно.
-4. Смените proxy credentials, email password, Twitter credential, Capsolver/AdsPower API keys, раскрытые referral codes и активные email/API sessions, которые могли быть выданы плагину.
+4. Смените proxy credentials, email password, Twitter credential, Capsolver/AdsPower API keys, выпущенные проектом referral codes и активные email/API sessions, которые могли быть выданы плагину во время run.
 5. Сохраните для анализа копию data directory, hash исходного `.softhub.zip`, manifest, `requirements.txt`, run ID, timestamps и внешние transaction hashes. Делайте копию после остановки Hub и не открывайте ее на основной машине.
 6. Не запускайте и не подготавливайте подозрительный пакет повторно. Удаление в UI стирает Hub-owned code, все версии и `.venv`, но сохраняет audit history/results и не отзывает уже раскрытые секреты. Активный или `needs_attention` run сначала нужно остановить и сверить.
 7. Перезапустите Hub, чтобы сменился loopback API token. Если подозревается подмена frontend/core, переустановите приложение из доверенного DMG с проверенным SHA-256; разработчики могут восстановить его из проверенного исходника.

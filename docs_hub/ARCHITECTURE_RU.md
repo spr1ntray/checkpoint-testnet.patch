@@ -1,6 +1,6 @@
-# Архитектура Soft Hub 0.6.4
+# Архитектура Soft Hub 0.6.5
 
-Документ фиксирует текущую архитектуру, реальные границы доверия и порядок превращения шести найденных legacy-ботов в плагины. Формулировки «сейчас» относятся к реализованному коду Soft Hub 0.6.4; пункты «нужно добавить» не являются обещанием уже существующей функции.
+Документ фиксирует текущую архитектуру, реальные границы доверия и порядок превращения шести найденных legacy-ботов в плагины. Формулировки «сейчас» относятся к реализованному коду Soft Hub 0.6.5; пункты «нужно добавить» не являются обещанием уже существующей функции.
 
 ## 1. Продуктовая модель
 
@@ -10,7 +10,7 @@ Soft Hub — локальное single-user desktop-приложение для 
 
 - один каталог данных;
 - одна центральная SQLite БД для профилей, модулей, запусков, событий и результатов;
-- один Vault для связки wallet/proxy/email/Twitter/AdsPower profile, реферального графа и отдельных глобальных Capsolver/AdsPower API keys;
+- один Vault для связки wallet/proxy/email/Twitter/AdsPower profile, реферальной топологии `child → parent` и отдельных глобальных Capsolver/AdsPower API keys;
 - versioned plugins вместо копирования и ручного запуска папок;
 - отдельный subprocess на run;
 - структурированный журнал и results вместо разрозненных console logs/CSV;
@@ -30,12 +30,12 @@ CLI и локальный браузерный режим остаются ин�
 Core владеет:
 
 - идентичностью профиля;
-- общей связкой EVM key / HTTP proxy / email / email password / Twitter / AdsPower profile, реферальным графом и глобальными Capsolver/AdsPower API keys;
+- общей связкой EVM key / HTTP proxy / email / email password / Twitter / AdsPower profile, реферальной топологией и глобальными Capsolver/AdsPower API keys;
 - шифрованием и unlock/lock;
 - атомарным импортом профилей и ограждённым plaintext export;
 - каталогом модулей и версий;
 - metadata discovery публичных GitHub-патчей через Patch Radar;
-- созданием run и ограничением общей конкуренции;
+- созданием run, глобальной конкуренцией subprocess и сохранённым per-run лимитом параллельных аккаунтов;
 - журналом, progress и results;
 - risk acknowledgement и account leases.
 
@@ -137,7 +137,7 @@ Soft Hub.app
 | Package manager | `soft_hub/plugins.py` | Manifest/ZIP validation, checksums, version install, venv, rollback. |
 | Run host | `soft_hub/runner.py` | Очередь, leases, subprocess, protocol, redaction, run/account statuses и results. |
 | Protocol adapter | `soft_hub/runtime/bootstrap.py` | Context decode, import/call, sync/async, signals, terminal events. |
-| Author API | `soft_hub/sdk.py` | `HubContext`, `HubAccount`, log/progress/result/account_state/cancel. |
+| Author API | `soft_hub/sdk.py` | `HubContext`, `HubAccount`, bounded `map_accounts`, direct-parent helpers, protect-secret control-frame, telemetry/cancel. |
 | Adapted catalog | `soft_hub/catalog/legacy.json`, `dist/plugins/` | Связывает legacy-исходники с проверяемыми встроенными `.softhub.zip`; установка остаётся явным действием оператора. |
 
 ## 4. Каталог данных
@@ -204,11 +204,13 @@ Scratch уникален для run, но сейчас не очищается. 
 |---|---|---|
 | Vault | `vault_meta`, `accounts`, `account_secrets`, `vault_secrets` | KDF/verifier, plaintext control metadata labels/address/fingerprints, encrypted account bundle и глобальные secrets. |
 | Plugins | `modules`, `module_versions` | Активная версия, manifest, health, enabled, paths, archive SHA. |
-| Runs | `runs`, `run_events`, `results` | Статусы, progress, redacted события и структурированные результаты. |
-| Concurrency | `account_leases` | Пара `chain_id + account_id` для chain write; внутренний service-scope + account для `external_write`. |
+| Runs | `runs`, `run_events`, `results`, `run_account_states`, `run_account_pins` | Статусы, сохранённый `account_concurrency`, per-account progress, target/direct-parent pins, redacted события и результаты. |
+| Concurrency | `account_leases` | Пара `chain_id + account_id` для chain write; внутренний service-scope + account для `external_write` и exclusive referral-parent access. |
 | Core | `settings`, `schema_migrations` | Настройки и применённая схема. |
 
 `run_events`, `results`, module manifests, labels, адреса, masked email/proxy labels, `twitter_configured` и fingerprints не шифруются Vault. Account/global secret payload шифруется. Plaintext в SQLite не означает публичность в UI/API: locked boundary скрывает и эту metadata. Поэтому plugin output обязан быть очищен до отправки, а backup всей БД всё равно считается чувствительным.
+
+Миграция `008_run_account_concurrency.sql` добавляет к `runs` эффективный лимит `1..20`; `009_run_account_pins.sql` фиксирует роли `target` и `referral_parent` на срок run и не даёт удалить используемый аккаунт. Это разные механизмы: колонка ограничивает workers внутри subprocess, pins удерживают согласованную identity/topology, а `account_leases` предотвращают конфликтующие write-действия.
 
 Наличие `vault_meta` и успешный unlock не означают наличие account row. Vault — контейнер и состояние ключа, а импортированный профиль — отдельная запись `accounts` + `account_secrets`. Корректное начальное состояние после создания Vault — `vault.exists=true`, `vault.unlocked=true`, `accounts=0`; onboarding и run UI обязаны показывать импорт как отдельный незавершённый шаг.
 
@@ -250,7 +252,7 @@ Renderer не является единственной защитой, но п�
 
 ### 6.3. Импорт профилей
 
-Основной UI-контракт 0.6.4 — таблица ровно из пяти колонок:
+Основной UI-контракт 0.6.5 — таблица ровно из пяти колонок:
 
 ```text
 private_key,proxy,email,twitter,adspower_profile
@@ -262,7 +264,7 @@ Email passwords и labels необязательны, но если переда
 
 Для key, proxy и email вычисляются SHA-256 fingerprints. В одном импорте и между аккаунтами они уникальны. Повтор того же key обновляет существующий профиль; proxy/email другого профиля присвоить нельзя.
 
-На каждый account создаётся один JSON secret bundle с private key, полным proxy, email, optional email password, optional Twitter, optional AdsPower profile ID и реферальными полями. Он шифруется AES-GCM с новым nonce и AAD `account:<uuid>:v1`. При повторном импорте существующего private key реферальные поля сохраняются. В plaintext `accounts` остаются:
+На каждый account создаётся один JSON secret bundle с private key, полным proxy, email, optional email password, optional Twitter, optional AdsPower profile ID и nullable `referrer_account_id`. Он шифруется AES-GCM с новым nonce и AAD `account:<uuid>:v1`. При повторном импорте существующего private key parent-связь сохраняется. В plaintext `accounts` остаются:
 
 - UUID, label, EVM address;
 - fingerprints;
@@ -279,15 +281,28 @@ Capsolver и AdsPower API keys хранятся отдельно от account bu
 
 Plaintext account export — осознанно опасный перенос данных, а не backup. Backend требует одновременно уже разблокированный Vault, повторную проверку мастер-пароля и точное регистрозависимое подтверждение `EXPORT PLAINTEXT SECRETS`. Основной формат — минимальный XLSX без formulas/macros/external links, где пять колонок `private_key,proxy,email,twitter,adspower_profile` записаны как SpreadsheetML `inlineStr`; это сохраняет исходные значения и закрывает CSV formula injection при открытии в spreadsheet. Для совместимости endpoint без `format` по-прежнему возвращает lossless UTF-8 BOM raw CSV, а `format: "xlsx"` — безопасный для Excel вариант. Raw CSV предназначен только для автоматического round-trip и не должен открываться в Excel/Sheets. Email passwords, labels/tags, реферальные связи/коды и глобальные Capsolver/AdsPower API keys не экспортируются. Оба ответа имеют `Cache-Control: no-store`; после сохранения защита Vault к файлу больше не применяется.
 
-### 6.5. Реферальный граф
+### 6.5. Реферальная топология
 
-Реферальная сеть хранится внутри зашифрованного account payload. У account может быть собственный код `referral_code` и ровно один источник приглашения: `referrer_account_id` другого локального account **или** `external_referrer_code`; одновременное заполнение запрещено. Коды нормализуются и должны содержать `4..2048` символов без control-символов.
+Реферальная сеть хранит только зашифрованную топологию `child → direct parent`: в account payload есть nullable `referrer_account_id`. Project-specific referral/invite codes в Vault отсутствуют. UI просит пользователя назначить родителя, но никогда не показывает поле кода.
 
-`POST /api/accounts/referrals` применяет полный batch в одной транзакции: расшифровывает актуальный граф, проверяет account IDs, self-links и циклы по всему итоговому графу, затем заново шифрует изменённые payloads. При любой ошибке не сохраняется ни одна связь. `list_accounts()` отдаёт только безопасную metadata — тип/ID/label реферера, признаки наличия кодов и число прямых потомков — но никогда не возвращает сами коды. UI-редактор в разделе **Аккаунты** использует эти признаки и не подставляет сохранённые коды обратно в DOM.
+`POST /api/accounts/referral-topology` принимает полный CAS snapshot:
 
-При run значение `referrer_code` разрешается по согласованному snapshot: внешний код ребёнка имеет приоритет, иначе берётся текущий собственный код выбранного parent account. Поэтому смена кода родителя автоматически применяется к его детям без дублирования секрета. Повторный импорт сохраняет граф; удаление parent атомарно отсоединяет его прямых детей; plaintext export намеренно исключает весь граф.
+```json
+{
+  "expected_revision": "<64 lowercase hex>",
+  "relationships": [
+    {"child_account_id": "<canonical UUID>", "parent_account_id": null}
+  ]
+}
+```
 
-Контракт плагина использует exact grants `referral_code` (собственный код account) и `referrer_code` (эффективный входящий код), которым точно соответствуют `action.resources.account` со значениями `referral_code` и `referrer`. Реферальные grants/resources требуют `compatibility.hub >=0.6.4`. Это расширение не меняет базовый strict-контракт `SH-SOFTWARE-0.6/2`: для пакетов без referral его минимальная совместимость остаётся `>=0.6.3`.
+Каждый существующий account должен встретиться ровно один раз; максимум — 10 000 строк. В одной транзакции backend сверяет revision, canonical UUID, полное покрытие, неизвестных parents, self-links и циклы, затем перешифровывает payloads полного snapshot. Любая ошибка откатывает весь batch. Повторный импорт сохраняет parent link; удаление не занятого parent атомарно превращает его прямых детей в roots. Аккаунты, зафиксированные `run_account_pins`, удалить нельзя.
+
+На первом успешном unlock миграция `vault_referral_topology_only_v1` атомарно вычищает legacy code-bearing поля из каждого payload, сохраняет только валидные parent links и ставит marker. Эти старые имена существуют только как предмет scrub-миграции, а не как разрешённый контракт.
+
+Новый строгий контракт — `SH-SOFTWARE-0.6/3` с `compatibility.hub >=0.6.5`; `/2` сохраняется только для загрузки исторических пакетов. Referral-aware action объявляет `action.referral.mode: "project_runtime"`, `parent_required`, `parent_access` и отдельные exact parent permissions/resources. Runner строит согласованный plan только для выбранных targets и их уникальных direct parents, фиксирует revision, создаёт pins ролей `target`/`referral_parent` и при `parent_access: "exclusive"` — service lease. Полного графа или ancestor closure subprocess не получает.
+
+SDK разрешает получить parent только через `context.referrals.parent_for(child.id)` либо bounded `context.referrals.parents`; `context.referral_levels` даёт уровни только выбранных targets. Проектный код получает, кэширует и применяет сам плагин. Сразу после fetch, до любого log/result/exception/print, он вызывает `context.protect_secret(code)`: exact value проходит неперсистируемым control-frame в память host Redactor текущего run, но не становится context option/event/result/summary/log/file и не сохраняется в Hub. Raw output остаётся запрещённым.
 
 ### 6.6. Выдача плагину
 
@@ -298,6 +313,8 @@ id, label, evm_address + только permissions.secrets
 ```
 
 На уровне построения bundle account-free action при пустом `permissions.secrets` не требует Vault key, хотя публичные start/batch endpoints всё равно закрыты общим unlock gate. Если выбраны accounts, key обязателен даже при пустом наборе grants; bundle тогда содержит только `id`, `label` и `evm_address`. При наличии grants Vault расшифровывает payload и добавляет только разрешённые поля. Это реальное least-data ограничение на уровне context. Затем JSON context записывается в stdin subprocess, после чего host очищает свои ссылки на временные account/context structures. В процессе плагина выданные секреты существуют в plaintext.
+
+Для referral-aware `/3` target bundles строятся по action grants и дополнительно содержат безопасные topology-поля `referrer_account_id` и относительный `referral_depth`; direct-parent bundles строятся отдельно и только по `action.referral.permissions/resources`. Parent, который не нужен ни одному выбранному target, не выдаётся. В context дополнительно передаются immutable links/levels и уже зажатый `account_concurrency`; project referral code там нет.
 
 Vault не защищает от уже авторизованного plugin-кода: получив secret, тот может отправить его в сеть или записать на диск. Поэтому установка плагина — решение о доверии к коду и зависимостям.
 
@@ -312,6 +329,7 @@ Vault не защищает от уже авторизованного plugin-к
 - отсутствие symlink/duplicates/casefold conflicts/zip-bomb признаков;
 - наличие root `hub.plugin.json` и `hub.checksums.json`;
 - manifest version/ID/runtime/permissions/actions;
+- strict `SH-SOFTWARE-0.6/3` для новых пакетов: Hub `>=0.6.5`, exact action resources/options, reserved account concurrency и project-runtime referral contract; `/2` допускается только как legacy-load compatibility;
 - точное совпадение списка checksum paths со всеми файлами;
 - SHA-256 каждого файла через constant-time compare;
 - наличие requirements path, если он объявлен.
@@ -354,7 +372,7 @@ Patch Radar принимает GitHub username или точный HTTPS URL `ht
 
 Карточка готова к установке лишь при ровно одном asset с case-insensitive суффиксом `.softhub` или `.softhub.zip`; обычный `.zip` не подходит. Metadata должна дополнительно пройти ранние границы: `asset.size` — целое число от 1 byte до 256 MB, `browser_download_url` — не длиннее 2048 символов и безопасный GitHub release URL того же owner/repository. Сканирование не скачивает и не устанавливает пакет. После явной команды оператора downloader отдельно применяет собственный лимит 256 MB, а затем передаёт файл в обычный inspection/install pipeline.
 
-Radar не отправляет GitHub token или Authorization, поэтому private repositories недоступны и действуют анонимные API rate limits. Обычная установка по GitHub URL также поддерживает только public releases; token-based доступ в 0.6.4 отсутствует.
+Radar не отправляет GitHub token или Authorization, поэтому private repositories недоступны и действуют анонимные API rate limits. Обычная установка по GitHub URL также поддерживает только public releases; token-based доступ в 0.6.5 отсутствует.
 
 ## 8. Lifecycle запуска
 
@@ -362,7 +380,7 @@ Radar не отправляет GitHub token или Authorization, поэтом�
 
 До backend admission renderer строит run form из action schema. Для `account_mode: one_or_more` единственный существующий профиль выбирается автоматически; при нуле профилей вместо немого пустого списка показывается inline import CTA, а успешный импорт возвращает оператора к сохранённым module/action. При нескольких profiles выбор остаётся явным, доступен select-all, а смена action сбрасывает прежний multi-profile batch независимо от risk taxonomy. Если accounts существуют, но ни один не выбран, submit останавливается на клиенте с inline-ошибкой и переводом focus/scroll к account selector; `RunManager` независимо сохраняет серверную проверку минимума одного account.
 
-Numeric options рендерятся с разной HTML step-семантикой: `integer` получает `step=1`, `number` — положительный конечный `multipleOf` либо `step=any`. Пустые необязательные numeric controls не сериализуются как `0`/`null`, а defaults не должны попадать в native `stepMismatch`. Boolean `acknowledge_testnet_transactions` не рендерится среди options именно у `testnet_write`.
+Numeric options рендерятся с разной HTML step-семантикой: `integer` получает `step=1`, `number` — положительный конечный `multipleOf` либо `step=any`. Пустые необязательные numeric controls не сериализуются как `0`/`null`, а defaults не должны попадать в native `stepMismatch`. Reserved `account_concurrency` вынесен в отдельный stepper с presets, числом выбранных профилей и подсказкой о волнах; он не смешивается с предметными параметрами action. Boolean `acknowledge_testnet_transactions` не рендерится среди options именно у `testnet_write`.
 
 Renderer не является trust boundary. Core независимо применяет закрытую action options schema: неизвестные keys, неверные JSON-типы, required/enum/range/multipleOf и malformed schema отклоняются до доступа к Vault и до INSERT run.
 
@@ -374,17 +392,21 @@ Renderer не является trust boundary. Core независимо при�
 4. Проверяет `account_mode`.
 5. Для testnet проверяет единственный host acknowledgement `TESTNET`; для mainnet — action phrase.
 6. После успешного testnet gate принудительно устанавливает `options.acknowledge_testnet_transactions=true`, если action schema объявляет это boolean-поле; значению клиента runner не доверяет.
-7. Повторно валидирует, что активные версия/path/health модуля не изменились между preflight и admission.
-8. Создаёт run со статусом `queued` и для write-action атомарно получает leases.
-9. Запускает daemon thread выполнения; account bundles расшифровываются только после получения concurrency slot непосредственно перед spawn.
+7. Валидирует closed options и для `one_or_more` подставляет safe default, зажимает `account_concurrency` числом выбранных accounts и сохраняет effective `1..20` (`1..5` у browser schema).
+8. Проверяет exact target resources. Для `action.referral` строит snapshot выбранных links и уникальных direct parents, валидирует exact parent resources и `parent_required`.
+9. Повторно валидирует, что активные версия/path/health модуля не изменились между preflight и admission.
+10. Создаёт run со статусом `queued`, `run_account_states`, target/referral-parent pins и необходимые write/exclusive-parent leases в одной транзакции.
+11. Запускает daemon thread выполнения; bundles расшифровываются только после получения глобального subprocess slot непосредственно перед spawn.
 
 Пакетный endpoint принимает UUID idempotency key и canonical request hash. Повтор того же payload возвращает прежние runs, а reuse ключа для другого payload отклоняется. Mainnet в batch запрещён. Все элементы preflight-проверяются, а runs и write-leases создаются в одной DB-транзакции, поэтому admission действует по принципу «всё или ничего».
 
-Глобальный semaphore по умолчанию пропускает четыре subprocess одновременно (`--max-concurrent` меняет предел). Ожидание слота прерываемое: worker проверяет cancellation через короткий timed acquire loop. Поэтому Stop у queued run завершается до расшифровки secrets, создания scratch и spawn; даже write-run в этой точке однозначно получает `cancelled`, а заранее зарезервированный lease освобождается. Semaphore освобождает только worker, который действительно получил slot. Внутренние threads/async tasks плагина Hub не контролирует.
+Глобальный semaphore по умолчанию пропускает четыре **software subprocess** одновременно (`--max-concurrent` меняет предел). Это batch software concurrency. Отдельный сохранённый `runs.account_concurrency` ограничивает workers аккаунтов **внутри одного** subprocess; SDK передаёт его как `context.account_concurrency`, а `context.map_accounts()` создаёт не больше этого числа threads. Эти лимиты не заменяют друг друга.
+
+Ожидание глобального slot прерываемое: worker проверяет cancellation через короткий timed acquire loop. Поэтому Stop у queued run завершается до расшифровки secrets, создания scratch и spawn; даже write-run в этой точке однозначно получает `cancelled`, а заранее зарезервированные leases/pins освобождаются. Semaphore освобождает только worker, который действительно получил slot. Hub не контролирует самодельные plugin threads/async tasks, поэтому strict `/3` требует соблюдать host limit, finite timeout, cancellation и join/cleanup внутри entrypoint.
 
 ### 8.2. Account leases
 
-Для каждого выбранного account и каждого `permissions.chains` chain-write run создаёт строку с expiry 30 минут. `external_write` создаёт одну строку на account во внутреннем service-scope, не заставляя автора указывать фиктивную chain. Конфликт одинакового scope/account блокирует второй run. Event loop проверяет monotonic clock независимо от наличия вывода и продлевает lease раз в минуту.
+Для каждого выбранного account и каждого `permissions.chains` chain-write run создаёт строку с expiry 30 минут. `external_write` создаёт одну строку на account во внутреннем service-scope, не заставляя автора указывать фиктивную chain. Referral parent с `parent_access: "exclusive"` получает отдельный service-scope lease; `shared_read` — только pin без lease. Конфликт одинакового scope/account блокирует второй run. Event loop проверяет monotonic clock независимо от наличия вывода и продлевает lease раз в минуту.
 
 Это защита от случайного параллельного write внутри одного экземпляра Hub, а не распределённый nonce manager:
 
@@ -411,14 +433,14 @@ Subprocess получает:
 
 Из environment удаляются произвольные пользовательские variables, но это hygiene, не sandbox. Plugin может обращаться к filesystem и network с правами OS-пользователя.
 
-Context сериализуется одной JSON-строкой и сразу закрывается stdin. Bootstrap ограничивает её 8 MiB. После decode он добавляет plugin root в `sys.path`, импортирует entrypoint и создаёт `started` event.
+Context сериализуется одной JSON-строкой и сразу закрывается stdin. Bootstrap ограничивает её 8 MiB. Помимо exact target/settings bundles он содержит сохранённый `account_concurrency`; referral-aware action получает отдельные exact parent bundles, bounded direct links и уровни выбранных targets, но не project referral codes. После decode bootstrap добавляет plugin root в `sys.path`, импортирует entrypoint и создаёт `started` event.
 
 ### 8.4. Protocol и сохранение
 
 Bootstrap добавляет к каждому SDK event:
 
 ```json
-{"protocol":"soft-hub-jsonl/1","seq":1,"type":"log",...}
+{"protocol":"soft-hub-jsonl/1","seq":1,"type":"log","level":"info","message":"Этап завершён","data":{}}
 ```
 
 Runner принимает только известные event types; account-scoped frame разрешён лишь для ID, сохранённого при admission текущего run. Stderr-строка становится warning event. После redaction:
@@ -428,6 +450,8 @@ Runner принимает только известные event types; account-s
 - при наличии account projection run-level progress остаётся telemetry и не меняет итог: `runs.progress` монотонно получает `AVG(run_account_states.progress)` по всем выбранным аккаунтам, включая `queued=0`;
 - `result` дополнительно создаёт строку `results`.
 - `account_state` атомарно обновляет `run_account_states` со status/stage/progress/last_message.
+
+Служебный `protect_secret` — отдельный control-frame, а не event. Runner принимает единственное exact string value длиной `4..4096`, ограничивает число/суммарный объём таких регистраций, немедленно добавляет value в in-memory Redactor и делает `continue`: frame не попадает в `run_events`, results или summary. Exact project code, следовательно, кратко присутствует в памяти plugin/host текущего run, но не persist-ится. Плагин обязан отправить frame сразу после fetch и до любого потенциального вывода; raw print/log всё равно запрещён.
 
 `run_account_states` создаётся для всех выбранных ID в той же admission-транзакции, что и run/leases, и хранит snapshot label независимо от дальнейшего удаления аккаунта. Terminal account status может задать только `account_state`; обычный log/result обновляет activity, но не определяет успех. Read-only projection доступен через `GET /api/runs/{id}/accounts`. Operations Shelf параллельно читает bounded lanes `GET /api/run-accounts?scope=active` и `?scope=attention`: SQL-фильтр применяется до `LIMIT`, поэтому свежая история не вытесняет зависшую операцию, а response явно сообщает `truncated`.
 
@@ -487,7 +511,8 @@ Electron включает renderer sandbox, context isolation, отключае�
 | Архив | Safe paths, лимиты, SHA-256 всех файлов и всего архива. | Подписи издателя, certificate chain, transparency log, доверенный registry. |
 | Patch Radar | Ограниченное чтение metadata public `.patch` repositories, строгий latest asset и отдельный download limit. | Private repositories, GitHub token и доказательство доверия к найденному автору/asset. |
 | Идентичность плагина | `id/version`, archive hash, `local_unsigned`. | Доказательство автора. Любой может пересобрать checksums. |
-| Secrets в context | Выдаются только declared secret kinds выбранных accounts. | Защита секрета после выдачи коду плагина. |
+| Secrets в context | Exact grants отдельно для targets/settings и direct referral parents; код проекта отсутствует во входном context/options. | Защита секрета после выдачи plugin-коду. |
+| Runtime referral code | `protect_secret` передаёт exact value неперсистируемым control-frame и регистрирует его в host Redactor. | Устранение краткого plaintext residency в plugin/host memory или разрешение логировать raw code. |
 | Environment/cwd | Узкий env, отдельный scratch, subprocess. | OS/container sandbox, filesystem ACL profile, syscall restrictions. |
 | Network | Плагин декларирует domains. | Firewall/DNS/proxy enforcement; allow-list пока не исполняется. |
 | Chains | Declared chain IDs участвуют в leases. | Проверка RPC chain, contracts, calldata, суммы или nonce. |
@@ -505,6 +530,8 @@ Checksums отвечают на вопрос «файлы совпали с та
 
 `Redactor` знает точные секреты текущего context и regex для EVM key, JWT и proxy. Он рекурсивно очищает event data, terminal summary и host error. Это снижает риск случайного логирования, но не является DLP.
 
+Project-runtime referral code отсутствует во входном context и persistence Hub. После того как плагин сам получил его у проекта, `protect_secret` передаёт exact value в host memory неперсистируемым control-frame; только после этой регистрации host может вычистить совпадение из последующего stderr/events. Это временное residency, а не хранение и не автоматическая защита вывода, случившегося до frame.
+
 События и results после redaction хранятся открыто в SQLite. Следовательно:
 
 - plugin не отправляет email password, key, proxy credentials, cookie, access token, raw transaction;
@@ -515,18 +542,18 @@ Checksums отвечают на вопрос «файлы совпали с та
 
 ## 12. Карта шести legacy-ботов
 
-Источник списка — `soft_hub/catalog/legacy.json`. В Soft Hub 0.6.4 каждый из шести Python-софтов по-прежнему связан с готовым историческим пакетом в `dist/plugins/`; эти архивы включаются в desktop release и устанавливаются из Patch Bay по ID, без передачи пути от renderer. Каталог `gigaverse/` остаётся UI/product reference и отдельным TypeScript/Electron product; он не входит в шесть Python entries.
+Источник списка — `soft_hub/catalog/legacy.json`. В Soft Hub 0.6.5 каждый из шести Python-софтов по-прежнему связан с готовым историческим пакетом в `dist/plugins/`; эти архивы включаются в desktop release и устанавливаются из Patch Bay по ID, без передачи пути от renderer. Каталог `gigaverse/` остаётся UI/product reference и отдельным TypeScript/Electron product; он не входит в шесть Python entries.
 
 ### 12.1. Сводная карта
 
 | Plugin ID | Исходник | Встроенный пакет адаптера | Исполняемая граница | Оставшийся blocker |
 |---|---|---|---|---|
-| `io.sprintray.skew-waitlist` | `skew_wl/` | `skew-waitlist-1.0.2.softhub.zip` | Profile validation и sequential waitlist POST с фактическими per-account milestones, timeout без auto-retry. | Adapter использует только email/proxy: Twitter уже есть в core, но в этот adapter не подключён; Telegram secret отсутствует. |
-| `io.sprintray.checkpoint-testnet` | `Checkpoint_testnet/` | `checkpoint-testnet-1.0.2.softhub.zip` | Inspect, daily farm, deposit, full cycle, sell offer и weighted per-account milestones в Arbitrum Sepolia; default — один fill на аккаунт. | Нужен prefunded testnet ETH; CAPTCHA-dependent ветки не имитируются. |
-| `io.sprintray.fairground-testnet` | `fairground/` | `fairground-testnet-1.0.2.softhub.zip` | External reconciliation с request/validation milestones; write gate явно завершается fail-closed. | Stable `plugin_data_dir`/checkpoint API для переноса durable FSM. |
-| `io.sprintray.sekai-testnet` | `sekai_testnet_clean/` | `sekai-testnet-1.0.2.softhub.zip` | Preflight, prefunded on-chain cycle и progress по фактически обработанным workflow steps в HyperEVM testnet. | Новая версия адаптера должна подключить уже имеющиеся AdsPower resources к реальному browser/QuickNode CAPTCHA flow. |
-| `io.sprintray.umia-testnet` | `umia-testnet-bot/` | `umia-testnet-1.0.2.softhub.zip` | Inspect, prefunded swap/auction bids и progress по подтверждённым операциям/bounded attempts в Base Sepolia. | Adapter не запрашивает/не интегрирует имеющийся в core Capsolver secret; CAPTCHA/Privy/faucet/auto-registration остаются fail-closed. |
-| `io.sprintray.risex-guard` | `risex/` | `risex-guard-0.1.2.softhub.zip` | Capability/account/market/reconciliation reads, durable guarded intent и milestones после journal writes. | Отдельный signer secret, аттестованный Node bridge и exactly-once order broker. |
+| `io.sprintray.skew-waitlist` | `skew_wl/` | Актуальный встроенный пакет каталога | Profile validation и sequential waitlist POST с фактическими per-account milestones, timeout без auto-retry. | Adapter использует только email/proxy: Twitter уже есть в core, но в этот adapter не подключён; Telegram secret отсутствует. |
+| `io.sprintray.checkpoint-testnet` | `Checkpoint_testnet/` | Актуальный встроенный пакет каталога | Inspect, daily farm, deposit, full cycle, sell offer и weighted per-account milestones в Arbitrum Sepolia; default — один fill на аккаунт. | Нужен prefunded testnet ETH; CAPTCHA-dependent ветки не имитируются. |
+| `io.sprintray.fairground-testnet` | `fairground/` | Актуальный встроенный пакет каталога | External reconciliation с request/validation milestones; write gate явно завершается fail-closed. | Stable `plugin_data_dir`/checkpoint API для переноса durable FSM. |
+| `io.sprintray.sekai-testnet` | `sekai_testnet_clean/` | Актуальный встроенный пакет каталога | Preflight, prefunded on-chain cycle и progress по фактически обработанным workflow steps в HyperEVM testnet. | Новая версия адаптера должна подключить уже имеющиеся AdsPower resources к реальному browser/QuickNode CAPTCHA flow. |
+| `io.sprintray.umia-testnet` | `umia-testnet-bot/` | Актуальный встроенный пакет каталога | Inspect, prefunded swap/auction bids и progress по подтверждённым операциям/bounded attempts в Base Sepolia. | Adapter не запрашивает/не интегрирует имеющийся в core Capsolver secret; CAPTCHA/Privy/faucet/auto-registration остаются fail-closed. |
+| `io.sprintray.risex-guard` | `risex/` | Актуальный встроенный пакет каталога | Capability/account/market/reconciliation reads, durable guarded intent и milestones после journal writes. | Отдельный signer secret, аттестованный Node bridge и exactly-once order broker. |
 
 ### 12.2. `skew-waitlist`
 
@@ -542,7 +569,7 @@ Checksums отвечают на вопрос «файлы совпали с та
 - summary `ok/fail/total`;
 - отмена между submit/retry.
 
-`register` честно объявлен как `external_write`: POST меняет внешний сервис без blockchain-транзакции, не требует financial acknowledgement, но получает per-account service-lease и неоднозначный force stop заканчивает в `needs_attention`. Core 0.6.4 умеет хранить и по разрешению выдавать Twitter, но `skew-waitlist-1.0.2` его не запрашивает; Telegram secret kind всё ещё отсутствует. Социальные данные нельзя обходным путём передавать через options.
+`register` честно объявлен как `external_write`: POST меняет внешний сервис без blockchain-транзакции, не требует financial acknowledgement, но получает per-account service-lease и неоднозначный force stop заканчивает в `needs_attention`. Core 0.6.5 умеет хранить и по разрешению выдавать Twitter, но текущий встроенный Skew adapter его не запрашивает; Telegram secret kind всё ещё отсутствует. Социальные данные нельзя обходным путём передавать через options.
 
 ### 12.3. `checkpoint-testnet`
 
@@ -569,7 +596,7 @@ Umia уже имеет hard allow-list Base Sepolia `84532` и block-list mainne
 - `faucet` → testnet_write с внешней регистрацией;
 - `full` → testnet_write.
 
-Первый релиз — portfolio, затем activities без auto-registration. Vault 0.6.4 умеет выдать глобальный Capsolver API key по явному разрешению, но `umia-testnet-1.0.2` его не запрашивает и не реализует CAPTCHA/Privy flow. Поэтому faucet/full и auto-registration остаются fail-closed; для доступных действий нужны prefunded Base Sepolia ETH и mUSDC. CSV portfolio и JSONL logger заменить per-account result/events. Перед retry проверять on-chain nonce, receipt, holdings/bids и состояние API.
+Первый релиз — portfolio, затем activities без auto-registration. Vault 0.6.5 умеет выдать глобальный Capsolver API key по явному разрешению, но текущий встроенный Umia adapter его не запрашивает и не реализует CAPTCHA/Privy flow. Поэтому faucet/full и auto-registration остаются fail-closed; для доступных действий нужны prefunded Base Sepolia ETH и mUSDC. CSV portfolio и JSONL logger заменить per-account result/events. Перед retry проверять on-chain nonce, receipt, holdings/bids и состояние API.
 
 ### 12.5. `fairground-testnet`
 
@@ -603,7 +630,7 @@ Core уже хранит per-account profile ID и global API key, выдаёт 
 
 ### 12.7. `risex-mainnet`
 
-RISEx-торговля остаётся заблокированной по безопасности, но в 0.6.4 есть исполняемый `io.sprintray.risex-guard`. Причины ограничения не косметические:
+RISEx-торговля остаётся заблокированной по безопасности, но в 0.6.5 есть исполняемый `io.sprintray.risex-guard`. Причины ограничения не косметические:
 
 - формат account допускает основной key и отдельный signer key;
 - Hub Vault имеет только один `evm_private_key` и не умеет lifecycle регистрации/отзыва signer;
@@ -627,7 +654,7 @@ RISEx-торговля остаётся заблокированной по бе
 
 ## 13. Исторический порядок адаптации
 
-Эта очерёдность была выполнена к 0.2.0 и сохранена в 0.6.4; ниже оставлена логика, по которой адаптеры разделялись на исполняемые и guarded slices.
+Эта очерёдность была выполнена к 0.2.0 и сохранена в 0.6.5; ниже оставлена логика, по которой адаптеры разделялись на исполняемые и guarded slices.
 
 Приоритет строится по принципу «быстрый observability win → testnet writes → state/browser → mainnet».
 
@@ -692,7 +719,7 @@ import/adapter tests
 
 ## 15. Backup и восстановление
 
-В UI 0.6.4 нет зашифрованного backup/restore. Ограждённый plaintext XLSX/raw CSV export переносит только `private_key,proxy,email,twitter,adspower_profile`, не сохраняет реферальный граф, историю, плагины и глобальные Capsolver/AdsPower API keys и не является backup. Для согласованной ручной копии безопаснее:
+В UI 0.6.5 нет зашифрованного backup/restore. Ограждённый plaintext XLSX/raw CSV export переносит только `private_key,proxy,email,twitter,adspower_profile`, не сохраняет реферальную топологию, историю, плагины и глобальные Capsolver/AdsPower API keys и не является backup. Для согласованной ручной копии безопаснее:
 
 1. Остановить новые runs и дождаться завершения либо осознанно зафиксировать `needs_attention`.
 2. Заблокировать Vault.
@@ -723,5 +750,8 @@ import/adapter tests
 11. Prepare/run не полагаются на cwd, user site packages или секретные env variables.
 12. Checksums не называются подписью, subprocess не называется sandbox, declarations не называются enforcement.
 13. Packaged app запускает core только из собственного managed runtime; системный Python не является скрытой runtime dependency пользователя.
+14. Новый plugin выпускается по `SH-SOFTWARE-0.6/3`; `/2` остаётся только legacy-load compatibility.
+15. `account_concurrency` ограничивает per-run workers и не подменяется глобальным batch/subprocess semaphore; workers thread-safe, cancellable и bounded.
+16. Referral topology содержит только `child → parent`; project code получает сам plugin, немедленно регистрирует через non-persisted `protect_secret` frame и нигде не сохраняет/не выводит.
 
 Эта честность — часть продукта: Hub должен не только запускать много софтов, но и показывать, где операция завершена, где требует внимания и чему именно пользователь доверил ключи.
