@@ -1,14 +1,14 @@
-# Checkpoint Testnet — Soft Hub plugin 1.4.0
+# Checkpoint Testnet — Soft Hub plugin 1.4.1
 
 Пакет для **Soft Hub 0.6.8+** (`SH-SOFTWARE-0.6/3`).
 
 ## Установка
 
-Patch Radar → репозиторий `spr1ntray/checkpoint-testnet.patch` → release **1.4.0**,  
+Patch Radar → репозиторий `spr1ntray/checkpoint-testnet.patch` → release **1.4.1**,  
 либо Local package:
 
 ```text
-dist/checkpoint-testnet-1.4.0.softhub.zip
+dist/checkpoint-testnet-1.4.1.softhub.zip
 ```
 
 Если `needs_setup` → **Подготовить**.
@@ -43,11 +43,11 @@ dist/checkpoint-testnet-1.4.0.softhub.zip
 ```bash
 python3 /path/to/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.4.0.softhub.zip
+  dist/checkpoint-testnet-1.4.1.softhub.zip
 ```
 
 ## Заметки
 
 - XP от fills индексируется с задержкой; смотри **Парсинг** позже.
-- SIWE/hCaptcha не блокирует сценарии 1.4.0.
+- SIWE/hCaptcha не блокирует сценарии 1.4.1.
 - Force stop после external write → `needs_attention`, сверь Checkpoint UI.

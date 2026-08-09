@@ -7,7 +7,7 @@
 Готовый пакет (Patch Radar / GitHub Release):
 
 ```text
-dist/checkpoint-testnet-1.4.0.softhub.zip
+dist/checkpoint-testnet-1.4.1.softhub.zip
 ```
 
 Repo: https://github.com/spr1ntray/checkpoint-testnet.patch  
@@ -38,7 +38,7 @@ Latest release: https://github.com/spr1ntray/checkpoint-testnet.patch/releases/l
 ```bash
 python3 /Users/sprintray/codex_soft/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.4.0.softhub.zip
+  dist/checkpoint-testnet-1.4.1.softhub.zip
 ```
 
 Исходники: `hub_package/`  

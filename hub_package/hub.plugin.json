@@ -3,7 +3,7 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Checkpoint XP на Arbitrum Sepolia: регистрация по реферальной цепи Hub, парсинг таблицы и daily farm fills.",
   "author": "sprintray",
   "presentation": {
