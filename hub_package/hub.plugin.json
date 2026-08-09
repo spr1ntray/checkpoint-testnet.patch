@@ -1,23 +1,25 @@
 {
   "schema_version": 1,
-  "contract_version": "SH-SOFTWARE-0.6/2",
+  "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.1.0",
-  "description": "Фарм Checkpoint XP на Arbitrum Sepolia: inspect, daily fills, deposit и sell offers.",
+  "version": "1.2.0",
+  "description": "Фарм Checkpoint XP на Arbitrum Sepolia: inspect, daily fills, deposit и sell offers с параллельными аккаунтами.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Модуль Soft Hub для Checkpoint testnet (Arbitrum Sepolia). Проверка XP/балансов, daily market fills (до 5/день), oracle deposit и sell offers. Секреты только из Vault. Lifecycle и results — по каждому аккаунту. SIWE/hCaptcha опциональны (можно включить позже с Capsolver).",
+    "description": "Модуль Soft Hub для Checkpoint testnet (Arbitrum Sepolia). Проверка XP/балансов, daily market fills (до 5/день), oracle deposit и sell offers. Параллельная обработка аккаунтов через account_concurrency. Секреты только из Vault. Lifecycle и results — по каждому аккаунту.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
     }
   },
   "compatibility": {
-    "hub": ">=0.6.3",
+    "hub": ">=0.6.5",
     "python": ">=3.12,<3.13",
-    "os": ["darwin"]
+    "os": [
+      "darwin"
+    ]
   },
   "runtime": {
     "type": "python",
@@ -29,7 +31,10 @@
     "heartbeat_seconds": 15
   },
   "permissions": {
-    "secrets": ["evm_private_key", "proxy"],
+    "secrets": [
+      "evm_private_key",
+      "proxy"
+    ],
     "network": [
       "arbitrum-sepolia-rpc.publicnode.com",
       "sepolia-rollup.arbitrum.io",
@@ -41,7 +46,9 @@
       "app.dynamicauth.com",
       "api.capsolver.com"
     ],
-    "chains": [421614],
+    "chains": [
+      421614
+    ],
     "financial_risk": "testnet",
     "browser": false,
     "local_services": []
@@ -54,15 +61,36 @@
       "risk": "read",
       "account_mode": "one_or_more",
       "permissions": {
-        "secrets": ["evm_private_key", "proxy"]
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
       },
       "resources": {
-        "account": ["private_key", "proxy"],
+        "account": [
+          "private_key",
+          "proxy"
+        ],
         "settings": []
       },
       "options": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          }
+        },
         "required": [],
         "additionalProperties": false
       }
@@ -74,15 +102,35 @@
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
-        "secrets": ["evm_private_key", "proxy"]
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
       },
       "resources": {
-        "account": ["private_key", "proxy"],
+        "account": [
+          "private_key",
+          "proxy"
+        ],
         "settings": []
       },
       "options": {
         "type": "object",
         "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          },
           "trades": {
             "type": "integer",
             "title": "Количество fills",
@@ -112,7 +160,7 @@
           "delay_seconds": {
             "type": "number",
             "title": "Пауза между действиями",
-            "description": "Задержка между mint/approve/fill.",
+            "description": "Задержка между mint/approve/fill на одном аккаунте.",
             "minimum": 0,
             "maximum": 60,
             "default": 8,
@@ -134,15 +182,36 @@
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
-        "secrets": ["evm_private_key", "proxy"]
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
       },
       "resources": {
-        "account": ["private_key", "proxy"],
+        "account": [
+          "private_key",
+          "proxy"
+        ],
         "settings": []
       },
       "options": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          }
+        },
         "required": [],
         "additionalProperties": false
       }
@@ -154,15 +223,35 @@
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
-        "secrets": ["evm_private_key", "proxy"]
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
       },
       "resources": {
-        "account": ["private_key", "proxy"],
+        "account": [
+          "private_key",
+          "proxy"
+        ],
         "settings": []
       },
       "options": {
         "type": "object",
         "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          },
           "trades": {
             "type": "integer",
             "title": "Количество fills",
@@ -192,7 +281,7 @@
           "delay_seconds": {
             "type": "number",
             "title": "Пауза между действиями",
-            "description": "Задержка между шагами.",
+            "description": "Задержка между шагами на одном аккаунте.",
             "minimum": 0,
             "maximum": 60,
             "default": 8,
@@ -225,15 +314,35 @@
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
-        "secrets": ["evm_private_key", "proxy"]
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
       },
       "resources": {
-        "account": ["private_key", "proxy"],
+        "account": [
+          "private_key",
+          "proxy"
+        ],
         "settings": []
       },
       "options": {
         "type": "object",
         "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей софт обрабатывает одновременно (workers внутри одного запуска).",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          },
           "points_amount": {
             "type": "number",
             "title": "Количество points",

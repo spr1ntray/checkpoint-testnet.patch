@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from decimal import Decimal
 from typing import Any
 
@@ -36,12 +37,11 @@ def run(context: HubContext) -> dict[str, Any]:
     if mode is None:
         raise ValueError(f"unsupported_action:{context.action_id}")
 
-    # Hub testnet gate already validates TESTNET; option may be injected by runner.
     cfg = _build_config(context)
     offer_pool = OfferPool()
     capsolver_key = _optional_setting(context, "capsolver")
-
-    counters = {
+    lock = threading.Lock()
+    counters: dict[str, int] = {
         "total": len(context.accounts),
         "succeeded": 0,
         "partial": 0,
@@ -53,18 +53,58 @@ def run(context: HubContext) -> dict[str, Any]:
         "transactions": 0,
     }
 
-    for account in context.accounts:
-        context.check_cancelled()
-        status = _run_account(
-            context,
-            account,
-            cfg=cfg,
-            mode=mode,
-            offer_pool=offer_pool,
-            capsolver_key=capsolver_key,
-            counters=counters,
-        )
-        counters[status] = counters.get(status, 0) + 1
+    workers = max(1, min(int(getattr(context, "account_concurrency", 1) or 1), len(context.accounts) or 1))
+    context.log(
+        "Старт Checkpoint",
+        data={
+            "mode": mode,
+            "accounts": len(context.accounts),
+            "account_concurrency": workers,
+        },
+    )
+
+    def worker(hub_account: HubAccount) -> str:
+        # Expected failures stay inside worker so one account does not cancel the batch.
+        try:
+            status = _run_account(
+                context,
+                hub_account,
+                cfg=cfg,
+                mode=mode,
+                offer_pool=offer_pool,
+                capsolver_key=capsolver_key,
+                counters=counters,
+                counters_lock=lock,
+            )
+        except CancelledError:
+            with lock:
+                counters["cancelled"] = counters.get("cancelled", 0) + 1
+            raise
+        except Exception:
+            with lock:
+                counters["failed"] = counters.get("failed", 0) + 1
+            # Lifecycle should already be terminal inside _run_account; fail-safe:
+            try:
+                context.account_state(
+                    hub_account.id,
+                    status="failed",
+                    stage="automation_failed",
+                    message="Необработанная ошибка worker",
+                )
+            except Exception:
+                pass
+            return "failed"
+        with lock:
+            counters[status] = counters.get(status, 0) + 1
+        return status
+
+    if hasattr(context, "map_accounts"):
+        context.map_accounts(worker)
+    else:
+        # Legacy Soft Hub without map_accounts: sequential fallback
+        for account in context.accounts:
+            context.check_cancelled()
+            worker(account)
 
     return {
         "total": counters["total"],
@@ -78,6 +118,7 @@ def run(context: HubContext) -> dict[str, Any]:
         "transactions": counters["transactions"],
         "chain_id": CHAIN_ID,
         "mode": mode,
+        "account_concurrency": workers,
     }
 
 
@@ -90,7 +131,9 @@ def _run_account(
     offer_pool: OfferPool,
     capsolver_key: str,
     counters: dict[str, int],
+    counters_lock: threading.Lock,
 ) -> str:
+    context.check_cancelled()
     context.account_state(
         hub_account.id,
         status="running",
@@ -108,6 +151,7 @@ def _run_account(
 
     try:
         account = _account_config(hub_account)
+        # Fresh client per worker — no shared web3/http session
         client = CheckpointClient(cfg, account)
         _preflight(client, hub_account)
 
@@ -139,7 +183,8 @@ def _run_account(
                 event_stats["fills_ok"] += 1
             if tx_hash:
                 event_stats["transactions"] += 1
-                counters["transactions"] += 1
+                with counters_lock:
+                    counters["transactions"] += 1
                 details = {**details, "tx_hash": str(tx_hash)}
                 context.result(
                     f"{action}: tx подтверждена",
@@ -149,7 +194,6 @@ def _run_account(
                     data=details,
                 )
 
-            # Progress milestones by stage
             progress_map = {
                 "siwe": 0.25,
                 "mint_usdc": 0.35,
@@ -161,10 +205,11 @@ def _run_account(
                 "parse": 0.80,
             }
             if action in progress_map and status in {"ok", "skipped", "failed"}:
+                stage = action if _valid_stage(action) else "automation"
                 context.account_state(
                     hub_account.id,
                     status="running",
-                    stage=action if action.isidentifier() or action.replace("_", "").isalnum() else "automation",
+                    stage=stage,
                     progress=float(progress_map[action]),
                     message=f"{action}: {status}",
                 )
@@ -196,7 +241,7 @@ def _run_account(
             terminal_status = "blocked"
             terminal_stage = "blocked"
             terminal_message = "Нет подходящих offers / мало газа"
-        elif write_without_tx or event_stats["failed"] > 0 and event_stats["transactions"] == 0:
+        elif write_without_tx or (event_stats["failed"] > 0 and event_stats["transactions"] == 0):
             terminal_status = "failed"
             terminal_stage = "automation_failed"
             terminal_message = "Транзакции не подтверждены"
@@ -251,15 +296,7 @@ def _run_account(
             data={"error_code": code},
         )
 
-    if terminal_status in {"succeeded", "partial"}:
-        context.result(
-            f"{hub_account.label}: Checkpoint {terminal_status}",
-            kind="account_summary",
-            status=terminal_status,
-            account_id=hub_account.id,
-            data=safe_summary,
-        )
-    elif terminal_status in {"failed", "blocked"} and safe_summary:
+    if terminal_status in {"succeeded", "partial", "failed", "blocked"} and safe_summary:
         context.result(
             f"{hub_account.label}: Checkpoint {terminal_status}",
             kind="account_summary",
@@ -294,7 +331,6 @@ def _build_config(context: HubContext) -> AppConfig:
     price = Decimal(
         str(_clamp_float(options.get("price_usdc_per_point", 50), 0.01, 1000.0, 50.0))
     )
-    # SIWE/hCaptcha optional: needs Capsolver grant (not required in this release).
     enable_siwe = False
     try_deposit = _as_bool(options.get("try_deposit", False))
     if context.action_id == "deposit":
@@ -340,7 +376,7 @@ def _build_config(context: HubContext) -> AppConfig:
         sell_price_per_point_max=price,
         sell_collateral=Decimal("0"),
         sell_repeats=1,
-        siwe_enabled=enable_siwe and context.action_id != "inspect" and context.action_id != "create_sell",
+        siwe_enabled=enable_siwe,
         siwe_captcha=True,
         hcaptcha_sitekey="14c486da-cd2e-4648-8446-0f469696acee",
     )
@@ -369,6 +405,12 @@ def _preflight(client: CheckpointClient, account: HubAccount) -> None:
     actual_chain = int(client.w3.eth.chain_id)
     if actual_chain != CHAIN_ID:
         raise RuntimeError(f"wrong_chain: RPC chainId={actual_chain}, need {CHAIN_ID}")
+
+
+def _valid_stage(stage: str) -> bool:
+    import re
+
+    return bool(re.fullmatch(r"^[a-z][a-z0-9_.-]{0,63}$", stage))
 
 
 def _public_data(value: Any) -> Any:
@@ -403,7 +445,6 @@ def _public_data(value: Any) -> Any:
 
 def _safe_error(exc: Exception) -> str:
     text = str(exc).replace("\n", " ").strip()
-    # never echo long secrets-looking blobs
     if len(text) > 280:
         text = text[:280]
     return text or type(exc).__name__
