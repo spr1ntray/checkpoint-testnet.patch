@@ -1,6 +1,6 @@
 # Безопасность Soft Hub MVP
 
-Этот документ описывает фактическую модель безопасности Soft Hub `0.6.5`. Это не заявление об аудите и не гарантия сохранности средств. Текущий desktop build — локальный preview для одного оператора и доверенных плагинов, а не публичный production-релиз; использование ценных mainnet-ключей до независимого аудита не рекомендуется.
+Этот документ описывает фактическую модель безопасности Soft Hub `0.6.8`. Это не заявление об аудите и не гарантия сохранности средств. Текущие macOS arm64 и Windows x64 desktop builds — локальные preview для одного оператора и доверенных плагинов, а не публичный production-релиз; использование ценных mainnet-ключей до независимого аудита не рекомендуется.
 
 ## Коротко
 
@@ -13,7 +13,7 @@
 - Архив проверяется на path traversal, symlink, конфликтующие пути, размер и SHA-256 файлов.
 - Packaged app запускает core через собственный управляемый Python runtime с `-I`; Python/Node.js пользователя не входят в runtime-требования.
 - **Python-плагин является доверенным кодом.** Subprocess и `.venv` не являются security sandbox.
-- Плагины имеют статус `local_unsigned`. Локальный desktop preview подписан ad-hoc и не notarized; ни plugin checksums, ни ad-hoc подпись не доказывают личность издателя.
+- Плагины имеют статус `local_unsigned`. macOS preview подписан ad-hoc и не notarized, Windows EXE не подписан Authenticode; ни plugin checksums, ни эти артефакты не доказывают личность издателя.
 
 ## Активы и границы модели
 
@@ -111,6 +111,16 @@ Export аккаунтов — явная declassification-операция, а �
 
 Ответ имеет `Cache-Control: no-store`; account export может содержать `adspower_profile`, поэтому считается plaintext secret export целиком. Глобальные Capsolver/AdsPower API keys, email passwords и топология связей не экспортируются; реферальные коды Hub не persist-ит. Поэтому этот plaintext-файл одновременно опасен как declassified subset и недостаточен как backup: повторный импорт в новый Vault не восстановит реферальную сеть. Эти проверки не защищают уже созданный plaintext-файл: его нельзя коммитить, отправлять в чат или оставлять в незашифрованном Downloads.
 
+### Статистическая проекция и CSV
+
+`output.mode: "account_table"` не разрешает плагину произвольный UI и не расширяет его permissions. Манифест объявляет не более 12 прямых scalar-ключей и до четырёх числовых агрегатов. Backend формирует safe report projection только из этих allowlisted keys результата с `kind`, равным snapshot `primary_kind`; необъявленные поля, вложенные объекты/массивы, raw response, DOM/HAR и plugin-owned HTML в UI не попадают.
+
+Label и public EVM address связывают действия одного оператора между сервисами, поэтому считаются чувствительной метаданной, хотя и не являются private key. Просмотр, поиск, фильтр и CSV export требуют token-authenticated API и открытый Vault; при lock server отвечает `423`, renderer очищает проекцию, а запоздавший ответ не может вернуть строки на экран.
+
+Итоговый статус берётся из authoritative `run_account_states`, а не из title, log или произвольного plugin status. Схема таблицы и account identity фиксируются в snapshot запуска, чтобы update/rollback/delete не переопределили историю. Сохранённые title/data повторно проходят redaction при построении safe projection; это defense-in-depth, а не разрешение плагину эмитить секрет.
+
+CSV формирует renderer только из уже полученной полной safe report projection с текущими поиском и фильтром. Он не обращается к raw results и не добавляет необъявленные поля. Если backend сообщает `truncated` — запуск содержит больше лимита 2 000 строк — renderer блокирует CSV целиком, а не экспортирует неполную выборку. Строковые ячейки, начинающиеся с `=`, `+`, `-`, `@`, tab, carriage return или line feed, получают ведущий апостроф и сохраняются как текст. Schema-typed `integer`, `number` и `decimal_string` не получают апостроф: отрицательные значения остаются числами. Кнопка скачивания доступна только при открытом Vault; после download файл становится обычным plaintext-артефактом и требует ручной проверки перед передачей третьему лицу.
+
 На POSIX Hub пытается создать data directory с mode `0700`, а базу и файлы пакета — с ограниченными mode. На Windows используются ACL, унаследованные от профиля пользователя; отдельная настройка ACL кодом не выполняется.
 
 В macOS desktop data directory по умолчанию находится в `~/Library/Application Support/Soft Hub`, отдельно от `/Applications/Soft Hub.app`. Замена или удаление только `.app` не стирает Vault и историю. Это удобная граница обновления, а не security boundary: процесс с доступом к каталогу пользователя или его backup всё равно получает ciphertext и открытые metadata.
@@ -148,11 +158,13 @@ TLS и пользовательская аутентификация отсут�
 
 ### GitHub Release и Patch Radar
 
-Обычная GitHub-установка и Patch Radar в 0.6.5 работают только с public GitHub-данными без token/Authorization. Private repositories не видны, а tokens/credentials в URL отклоняются. Это также означает анонимные GitHub API rate limits.
+Обычная GitHub-установка и Patch Radar в 0.6.8 работают только с public GitHub-данными без token/Authorization. Private repositories не видны, а tokens/credentials в URL отклоняются. Это также означает анонимные GitHub API rate limits.
 
 Patch Radar принимает только username или точный HTTPS owner URL, читает не более первых 100 public repositories с `api.github.com`, отбирает точный case-insensitive суффикс `.patch` и читает только `releases/latest`. Ready-статус возможен лишь при ровно одном release asset с case-insensitive суффиксом `.softhub` или `.softhub.zip` и безопасной GitHub download URL того же owner/repository. Ранняя metadata-проверка требует, чтобы `asset.size` был целым числом от 1 byte до 256 MB, а `browser_download_url` — строкой не длиннее 2048 символов.
 
-Само сканирование выполняет только ограниченные metadata GET: оно не скачивает, не открывает, не проверяет, не устанавливает и не запускает asset. Скачивание начинается только по явной команде оператора; downloader независимо применяет собственный лимит 256 MB, после чего архив проходит обычный install pipeline. Наличие repository в Patch Radar не доказывает личность или доверенность автора.
+Само сканирование выполняет только ограниченные metadata GET: оно не скачивает, не открывает, не проверяет, не устанавливает и не запускает asset. Скачивание начинается только по явной команде оператора; downloader независимо применяет собственный лимит 256 MB, после чего архив проходит обычный install pipeline.
+
+После первой проверенной установки таблица `github_module_sources` привязывает repository к фактическому module id, а release asset — к версии и SHA-256. Core блокирует смену module id в том же repository, перенос связанного id в другой repository, downgrade и повторную публикацию той же версии с другим содержимым. Неясная SemVer metadata и identity conflicts не получают автоматическую кнопку Radar. Привязка берётся только из server-side downloader и inspected manifest, а не из renderer. Она защищает последовательность обновлений, но по-прежнему не доказывает личность или доверенность GitHub-автора.
 
 ## Граница доверия плагина
 
@@ -191,7 +203,7 @@ Non-financial мутация внешнего API объявляется как 
 
 После restart, forced stop или неоднозначного завершения write-run получает `needs_attention`, а leases удерживаются. После внешней проверки оператор должен явно ввести `RECONCILED`; тогда статус становится `reconciled`, и только затем leases снимаются. Hub не может сам доказать, была ли транзакция отправлена до сбоя. Exclusive lock data directory не позволяет второму Hub одновременно переписать состояние первого.
 
-Известный terminal `failed` не равен неоднозначному write. У него нет safety lease: оператор может отметить уведомление просмотренным, после чего run получает `reviewed` и исчезает только из live-attention projection. Эта операция fail-closed не выполняется при неожиданном lease, не изменяет исходную ошибку/account states/results/events и не называется внешней сверкой.
+Известная terminal-проблема не равна неоднозначному write. Это может быть общий `failed` или terminal run с account-state `partial`, `failed`, `blocked` либо неисторическим `unknown`, в том числе при общем `succeeded`/`cancelled`. Если `needs_attention` и safety lease отсутствуют, оператор может закрыть уведомление: run получает `reviewed` и исчезает только из live-attention projection. Операция fail-closed не выполняется при неожиданном lease, не изменяет исходную ошибку/account states/results/events и не называется внешней сверкой. Если хотя бы один аккаунт имеет `needs_attention`, весь mixed run требует `RECONCILED`.
 
 Force-stop является отдельной разрушительной операцией и на API требует точное acknowledgement `FORCE STOP`. На POSIX Hub сигналит process group, на Windows использует best-effort `taskkill /T /F`. Это завершение процесса, а не откат внешнего действия: отделившийся daemon теоретически может пережить сигнал, а write-run всё равно требует сверки.
 
@@ -232,7 +244,7 @@ Scratch-каталог сохраняется после run. Если плаг�
 4. Смените proxy credentials, email password, Twitter credential, Capsolver/AdsPower API keys, выпущенные проектом referral codes и активные email/API sessions, которые могли быть выданы плагину во время run.
 5. Сохраните для анализа копию data directory, hash исходного `.softhub.zip`, manifest, `requirements.txt`, run ID, timestamps и внешние transaction hashes. Делайте копию после остановки Hub и не открывайте ее на основной машине.
 6. Не запускайте и не подготавливайте подозрительный пакет повторно. Удаление в UI стирает Hub-owned code, все версии и `.venv`, но сохраняет audit history/results и не отзывает уже раскрытые секреты. Активный или `needs_attention` run сначала нужно остановить и сверить.
-7. Перезапустите Hub, чтобы сменился loopback API token. Если подозревается подмена frontend/core, переустановите приложение из доверенного DMG с проверенным SHA-256; разработчики могут восстановить его из проверенного исходника.
+7. Перезапустите Hub, чтобы сменился loopback API token. Если подозревается подмена frontend/core, переустановите приложение из доверенного DMG или EXE с проверенным SHA-256; разработчики могут восстановить его из проверенного исходника.
 8. Сопоставьте `needs_attention` runs с chain explorer/API проекта. Не повторяйте write-действие, пока не исключен предыдущий broadcast.
 
 Если скомпрометирован только мастер-пароль, но злоумышленник имел доступ к копии data directory, считайте account secrets раскрываемыми и все равно ротируйте их. Функции rekey в MVP нет: создайте чистый data directory с новым паролем и импортируйте уже замененные credentials.
@@ -243,13 +255,15 @@ Scratch-каталог сохраняется после run. Если плаг�
 
 Плагины имеют статус `local_unsigned`. SHA-256 не доказывает авторство: злоумышленник может изменить package payload и пересчитать находящийся рядом checksum manifest.
 
-Текущая локальная macOS-сборка использует ad-hoc подпись и не проходит Apple notarization. Ad-hoc подпись помогает macOS проверить внутреннюю согласованность code bundle, но не связывает его с проверенным издателем и не заменяет Developer ID. Поэтому Gatekeeper может заблокировать первое открытие preview.
+Текущая локальная macOS-сборка использует ad-hoc подпись и не проходит Apple notarization. Ad-hoc подпись помогает macOS проверить внутреннюю согласованность code bundle, но не связывает его с проверенным издателем и не заменяет Developer ID. Поэтому Gatekeeper может заблокировать первое открытие preview. Windows EXE не имеет Authenticode-подписи, поэтому SmartScreen также может предупреждать или блокировать запуск.
 
-Публичный релиз требует сертификата Developer ID Application, hardened runtime, Apple notarization и stapling. До появления такого pipeline распространяйте preview только по доверенному каналу вместе с внешним SHA-256. Не отключайте Gatekeeper глобально и не удаляйте quarantine-атрибут ради неизвестной сборки; для проверенного локального preview используйте штатный **Privacy & Security → Open Anyway**.
+Публичный релиз требует сертификата Developer ID Application, hardened runtime, Apple notarization/stapling на macOS и Authenticode signing на Windows. До появления такого pipeline распространяйте preview только по доверенному каналу вместе с внешним SHA-256. Не отключайте Gatekeeper или SmartScreen глобально ради неизвестной сборки.
 
 ### Управляемый Python runtime
 
-Текущий packaged Electron app включает CPython 3.12.13, зависимости core и сам `soft_hub`. Builder загружает закреплённый runtime archive, проверяет его заданный SHA-256, устанавливает `requirements-runtime.lock`, фиксирует hash исходников и выполняет import/crypto self-check. Launcher в packaged-режиме рассматривает только interpreter из `Contents/Resources/python`, запускает его с `-I` и не использует `PATH`, системный Python либо `SOFT_HUB_PYTHON` как fallback.
+Текущий packaged Electron app включает CPython 3.12.13, зависимости core и сам `soft_hub`. Builder использует явные targets `darwin-arm64` и `win32-x64`, загружает закреплённый runtime archive, проверяет SHA-256, exact `requirements-runtime.lock` и hash исходников. macOS target выполняет native import/crypto self-check; cross-target Windows проверяется статически, включая `python.exe`, Python/MSVC DLL и архитектуру всех native `.pyd`. `beforePack` запрещает упаковать Darwin runtime в Windows-приложение или наоборот.
+
+Launcher в packaged-режиме рассматривает только `Contents/Resources/python/bin/python3` на macOS либо `resources/python/python.exe` на Windows, запускает его с `-I` и не использует `PATH`, системный Python или `SOFT_HUB_PYTHON` как fallback. Windows layout содержит нужные MSVC runtime DLL, поэтому отдельный Visual C++ Redistributable пользователю не требуется. Статическая cross-проверка не заменяет clean-machine install/start/import smoke на Windows.
 
 Managed runtime всё равно является частью trust boundary: доверять приходится источнику CPython artifact, закреплённому hash, release builder, lock-файлу и включённым wheels. Self-check обнаруживает часть повреждений и несовместимостей, но не доказывает отсутствие вредоносного кода и не создаёт sandbox.
 
@@ -262,7 +276,7 @@ Managed runtime всё равно является частью trust boundary: 
 ### Другие отсутствующие механизмы
 
 - нет multi-user access control, TLS, remote API или rate limiting для unlock;
-- нет публичного Developer ID/notarized release pipeline для текущего preview;
+- нет публичного Developer ID/notarized macOS и Authenticode-signed Windows release pipeline;
 - нет автоматической очистки scratch, malware scanning и dependency audit;
 - нет автоматического или зашифрованного backup/restore, rekey и recovery master password; plaintext XLSX/raw CSV export не заменяет эти механизмы;
 - нет гарантии, что force stop откатит внешнее действие;

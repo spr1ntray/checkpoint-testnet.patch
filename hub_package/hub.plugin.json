@@ -3,12 +3,12 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.3.0",
-  "description": "Checkpoint XP на Arbitrum Sepolia: парсинг таблицы и daily farm fills.",
+  "version": "1.4.0",
+  "description": "Checkpoint XP на Arbitrum Sepolia: регистрация по реферальной цепи Hub, парсинг таблицы и daily farm fills.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Парсинг XP/балансов в таблицу Soft Hub и daily farm market fills на Arbitrum Sepolia. Параллельные аккаунты, секреты из Vault, только два действия: парсинг и фарм.",
+    "description": "Регистрация кошельков по топологии рефералов Soft Hub (parent-first), парсинг XP/балансов и daily farm market fills на Arbitrum Sepolia. Код реферала — EVM-адрес parent; manual invite code не нужен.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
@@ -52,6 +52,90 @@
     "local_services": []
   },
   "actions": [
+    {
+      "id": "register",
+      "name": "Регистрация",
+      "description": "Индексирует кошельки в Checkpoint portfolio и сажает их на реферальные коды по топологии Soft Hub. Уровни идут parent-first: корни и родители раньше детей.",
+      "risk": "external_write",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": [
+          "evm_private_key",
+          "proxy"
+        ]
+      },
+      "resources": {
+        "account": [
+          "private_key",
+          "proxy"
+        ],
+        "settings": []
+      },
+      "referral": {
+        "mode": "project_runtime",
+        "parent_required": false,
+        "parent_access": "shared_read",
+        "permissions": {
+          "secrets": []
+        },
+        "resources": {
+          "account": []
+        }
+      },
+      "output": {
+        "mode": "account_table",
+        "title": "Регистрация и рефералы",
+        "primary_kind": "register_result",
+        "columns": [
+          {
+            "key": "is_root",
+            "title": "Корень",
+            "type": "boolean"
+          },
+          {
+            "key": "has_parent",
+            "title": "Есть parent",
+            "type": "boolean"
+          },
+          {
+            "key": "referral_status",
+            "title": "Статус реферала",
+            "type": "string"
+          },
+          {
+            "key": "already_linked",
+            "title": "Уже был",
+            "type": "boolean"
+          },
+          {
+            "key": "portfolio",
+            "title": "Portfolio",
+            "type": "boolean"
+          }
+        ]
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей одного уровня обрабатывать одновременно. Между уровнями — barrier (родители раньше детей).",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20,
+            "multipleOf": 1,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
     {
       "id": "inspect",
       "name": "Парсинг",

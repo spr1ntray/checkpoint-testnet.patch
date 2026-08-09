@@ -1,13 +1,13 @@
 # Checkpoint Testnet
 
-Софт для фарма **Checkpoint XP** на **Arbitrum Sepolia**, упакованный под **Soft Hub 0.6.4**.
+Софт для фарма **Checkpoint XP** на **Arbitrum Sepolia**, упакованный под **Soft Hub 0.6.8+**.
 
 ## Soft Hub (основной путь)
 
 Готовый пакет (Patch Radar / GitHub Release):
 
 ```text
-dist/checkpoint-testnet-1.2.0.softhub.zip
+dist/checkpoint-testnet-1.4.0.softhub.zip
 ```
 
 Repo: https://github.com/spr1ntray/checkpoint-testnet.patch  
@@ -16,33 +16,34 @@ Latest release: https://github.com/spr1ntray/checkpoint-testnet.patch/releases/l
 ### Установка
 
 1. Открой **Soft Hub**  
-2. **Патчи** → Local package → выбери `.softhub.zip`  
+2. **Патчи** → Patch Radar (`spr1ntray/checkpoint-testnet.patch`) или Local package  
 3. Если `needs_setup` → **Подготовить**  
-4. В **Аккаунтах** должны быть `private_key` + `proxy`  
-5. На кошельках — ETH (Arbitrum Sepolia) на газ  
-6. **Софты** → **Checkpoint Testnet**
+4. В **Аккаунтах** — `private_key` + `proxy`  
+5. Настрой **реферальную топологию** (child → parent)  
+6. Для фарма — ETH Arbitrum Sepolia на газ  
+7. **Софты** → **Checkpoint Testnet**
 
 ### Действия
 
 | Действие | Риск | Назначение |
 |----------|------|------------|
-| Проверить XP и балансы | read | ETH / test USDC / XP |
-| Daily farm | testnet_write | до 5 fills/день |
-| Deposit | testnet_write | oracle deposit |
-| Полный цикл | testnet_write | deposit? + fills |
-| Создать sell offer | testnet_write | sell listing |
+| **Регистрация** | external_write | Portfolio + рефералы по топологии Hub (parent-first) |
+| **Парсинг** | read | ETH / test USDC / XP |
+| **Фарм** | testnet_write | до 5 fills/день |
+
+Реферальный код Checkpoint = **EVM-адрес parent**. Manual invite code не нужен и запрещён контрактом Soft Hub `/3`.
 
 ### Сборка пакета
 
 ```bash
 python3 /Users/sprintray/codex_soft/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.2.0.softhub.zip
+  dist/checkpoint-testnet-1.4.0.softhub.zip
 ```
 
-Исходники пакета: `hub_package/`  
+Исходники: `hub_package/`  
 Контракт: `docs_hub/SOFTWARE_SPEC_RU.md` (`SH-SOFTWARE-0.6/3`)  
-Параллельность: option **Параллельные аккаунты** (`account_concurrency`) + `context.map_accounts()`
+Параллельность: `account_concurrency` + `map_accounts`; для регистрации — ещё `referral_levels`.
 
 ## CLI (legacy / отладка)
 
@@ -56,6 +57,6 @@ CLI остаётся для локальной отладки; **production-пу
 
 ## Важно
 
-- XP от fills может обновляться с **лагом 10–30 мин** → смотри **Проверить XP** позже  
-- Deposit может skip (oracle/registry)  
-- После force-stop write → сверка в chain explorer  
+- XP от fills может обновляться с **лагом** → смотри **Парсинг** позже  
+- После force-stop external write → `needs_attention`, сверь Checkpoint UI  
+- Уже привязанный к **другому** referrer → `blocked` (пересадка невозможна)

@@ -1,6 +1,6 @@
-# Нормативное техническое задание на софт для Soft Hub 0.6.5
+# Нормативное техническое задание на софт для Soft Hub 0.6.8
 
-Статус документа: обязательный контракт для всех новых модулей и всех новых major/minor-релизов существующих модулей, встраиваемых в Soft Hub 0.6.5.
+Статус документа: обязательный контракт для всех новых модулей и всех новых major/minor-релизов существующих модулей, встраиваемых в Soft Hub 0.6.8.
 
 Версия контракта: `SH-SOFTWARE-0.6/3`.
 
@@ -19,7 +19,7 @@
 
 Для нового пакета порядок источников истины таков: этот документ `/3`, `schemas/plugin.schema.json`, `validate_manifest()`, SDK/runtime и acceptance tests. Runtime-совместимость с `/2` и более старыми манифестами является только механизмом запуска истории, а не послаблением `/3`.
 
-Исполняемые источники истины для Soft Hub 0.6.5:
+Исполняемые источники истины для Soft Hub 0.6.8:
 
 - `soft_hub/plugins.py` — проверка манифеста, архива, presentation assets и установка;
 - `schemas/plugin.schema.json` — авторская JSON Schema;
@@ -65,7 +65,7 @@ Hub:
 
 ### 3.2. Чего Hub не обеспечивает
 
-Плагин выполняется с правами текущего OS-пользователя. В Soft Hub 0.6.5 нет OS/filesystem/network sandbox. Поэтому:
+Плагин выполняется с правами текущего OS-пользователя. В Soft Hub 0.6.8 нет OS/filesystem/network sandbox. Поэтому:
 
 - `permissions.network`, `permissions.browser` и `permissions.local_services` являются проверяемыми декларациями, но не firewall;
 - отдельная `.venv` изолирует зависимости, но не полномочия процесса;
@@ -232,6 +232,16 @@ plugin/...
 - короткое `description` верхнего уровня и полное `presentation.description` не должны противоречить друг другу;
 - маркетинговые обещания, которые код не гарантирует, ЗАПРЕЩЕНЫ.
 
+Весь отображаемый текст пакета — часть интерфейса Hub, а не техническая документация. Для русскоязычного продукта `name`, `description`, `presentation`, названия и описания actions, option `title`/`description`/`placeholder`/`enum_labels`, account messages и безопасные ошибки ОБЯЗАНЫ быть написаны живым понятным русским языком:
+
+- активный залог и короткие предложения; сначала — что произойдёт, затем — что нужно от пользователя;
+- обычные слова «софт», «аккаунт», «запуск», «настройка», «результат» вместо видимых `module`, `action`, `payload`, `lifecycle`, `scope`, `permission`, `lease`, `venv` и иных внутренних терминов;
+- без англоязычных заглушек и верхнерегистровых техно-ярлыков, если это не имя продукта, общепринятая аббревиатура или точная security confirmation phrase;
+- без канцелярита, безличных формулировок, псевдомаркетинга и обещаний результата, которого код ещё не подтвердил;
+- одна подсказка отвечает на один вопрос и по возможности укладывается в 1–2 коротких предложения.
+
+Hub показывает manifest-текст без смыслового переписывания. Поэтому неудачная формулировка в пакете считается дефектом самого софта и блокирует UX-приёмку.
+
 ### 5.3. Compatibility и runtime
 
 Новый пакет ОБЯЗАН объявлять:
@@ -246,9 +256,11 @@ plugin/...
 }
 ```
 
-`compatibility.hub` для `/3` ОБЯЗАН быть не ниже `>=0.6.5`; сейчас поддерживается только форма `>=x.y.z`. `compatibility.python` и `compatibility.os` являются обязательной авторской декларацией. Installer проверяет минимальную версию Hub и форму полей, но пока не сопоставляет `os` с текущей системой и не исполняет Python constraint. Поля архитектуры в manifest нет. Поэтому автор ОБЯЗАН указывать только реально протестированные release OS/architecture и выполнить собственный fail-closed runtime check до первого side effect.
+`compatibility.hub` для `/3` ОБЯЗАН быть не ниже `>=0.6.5`; сейчас поддерживается только форма `>=x.y.z`. Контракт `action.output` появился в Hub 0.6.8, поэтому пакет хотя бы с одним таким действием ОБЯЗАН объявить `compatibility.hub: ">=0.6.8"` или выше. `compatibility.python` и `compatibility.os` являются обязательной авторской декларацией. Installer проверяет минимальную версию Hub и форму полей, но пока не сопоставляет `os` с текущей системой и не исполняет Python constraint. Поля архитектуры в manifest нет. Поэтому автор ОБЯЗАН указывать только реально протестированные release OS/architecture и выполнить собственный fail-closed runtime check до первого side effect.
 
-Основной поставляемый desktop artifact 0.6.5 — macOS arm64. В репозитории есть Windows x64 build target, но его наличие не доказывает, что конкретный плагин и все native wheels протестированы на Windows. Packaged Linux target отсутствует. Копировать `darwin`, `win32`, `linux` в manifest «на всякий случай» ЗАПРЕЩЕНО.
+Soft Hub 0.6.8 поставляет два автономных desktop target: macOS arm64 и Windows 10/11 x64. Оба содержат core и собственный CPython 3.12 runtime; пользователю НЕ ТРЕБУЮТСЯ системные Python, Node.js, Git или Microsoft Visual C++ Redistributable. Windows bundle включает нужные MSVC runtime DLL, а его Python-зависимости готовятся только из бинарных `cp312-win_amd64` wheels; Hub не компилирует native-зависимости плагина на компьютере пользователя. Packaged Linux target отсутствует.
+
+Наличие desktop target не доказывает переносимость конкретного плагина. Автор ОБЯЗАН указывать в `compatibility.os` только фактически поддержанные системы и выполнить полный smoke **из установленного финального пакета** на каждом заявленном release OS/architecture: `darwin` означает macOS arm64 target, `win32` — Windows 10/11 x64 target. Для Windows все native-зависимости ОБЯЗАНЫ иметь совместимые `cp312-win_amd64` wheels; зависимость, требующая compiler/toolchain либо внешнего Python/Node/VC++ runtime, блокирует приёмку. Копировать `darwin`, `win32`, `linux` в manifest «на всякий случай» ЗАПРЕЩЕНО.
 
 Объект `runtime`:
 
@@ -260,11 +272,11 @@ plugin/...
 - `safe_stop`: обязательный boolean;
 - `heartbeat_seconds`: integer `5..300`, рекомендуемое значение `15`.
 
-`heartbeat_seconds` проходит проверку manifest, но runner 0.6.5 не использует его как watchdog, не убивает зависший процесс и не реализует resume. Плагин ОБЯЗАН самостоятельно ставить bounded timeout на каждую сеть/браузер/дочерний процесс и общий deadline на action/account. Heartbeat показывает активность, но не доказывает прогресс и не заменяет timeout.
+`heartbeat_seconds` проходит проверку manifest, но runner 0.6.8 не использует его как watchdog, не убивает зависший процесс и не реализует resume. Плагин ОБЯЗАН самостоятельно ставить bounded timeout на каждую сеть/браузер/дочерний процесс и общий deadline на action/account. Heartbeat показывает активность, но не доказывает прогресс и не заменяет timeout.
 
 `safe_stop: true` разрешено только если плагин регулярно проверяет отмену, прекращает создание новой внешней работы и выполняет bounded cleanup. Это обещание автора, а не автоматически доказанная гарантия.
 
-На macOS Hub даёт cooperative process-group `SIGTERM` и через 10 секунд усиливает остановку. На Windows текущий `process.terminate()` не гарантирует доставку Python cancellation flag и cleanup даже при `safe_stop: true`. Cross-platform write-софт ОБЯЗАН учитывать force termination и reconciliation; нельзя описывать Windows stop как гарантированно мягкий.
+Hub создаёт для run отдельную OS-группу процессов: на macOS мягкая остановка посылает process-group `SIGTERM`, а force-stop — `SIGKILL`; на Windows run создаётся в новой process group, мягкая остановка вызывает `process.terminate()`, а force-stop завершает всё дерево через `taskkill /T /F` с fallback на kill. Плагин ОБЯЗАН запускать свои дочерние процессы без detach, учитывать cancellation и закрывать их в bounded cleanup. Доставка cooperative Python cancellation на Windows не гарантируется даже при `safe_stop: true`, поэтому cross-platform write-софт ОБЯЗАН быть корректен при force termination и иметь reconciliation; описывать остановку как гарантированно мягкую ЗАПРЕЩЕНО.
 
 ### 5.4. Permissions
 
@@ -314,6 +326,10 @@ Legacy secret names `referral_code` и `referrer_code` в `SH-SOFTWARE-0.6/3` З
 - `permissions.secrets`;
 - `resources.account` и `resources.settings`;
 - `options`.
+
+`output` — необязательная host-owned декларация представления результатов. Для обычного action его можно опустить. Если софт должен дать одну строку статистики на каждый кошелёк, используется точный `output.mode: "account_table"`, описанный в разделе 9.
+
+Пакет с любым `action.output` ОБЯЗАН объявить `compatibility.hub >=0.6.8`; общий минимум `/3` без этого поля остаётся `>=0.6.5`.
 
 Допустимые risks:
 
@@ -365,6 +381,8 @@ Legacy secret names `referral_code` и `referrer_code` в `SH-SOFTWARE-0.6/3` З
 
 Реферальная модель `/3` — это только зашифрованная топология `child → direct parent`. Пользователь не вводит own/external code. Vault, входной run context/options и topology API не выдают, не вычисляют и не хранят project-specific referral/invite codes; единственное host-исключение — кратковременный in-memory redaction control-frame от `protect_secret`, который не persist-ится. Любое option-поле, которое по имени или смыслу просит manual referral/invite code, ЗАПРЕЩЕНО глобально во всём `/3`, даже если action не объявляет `action.referral`. После перехода на 0.6.5 legacy code fields удаляются атомарно при unlock; валидная parent-связь сохраняется.
 
+Hub 0.6.8 показывает эту топологию как графический rooted forest: каждый root располагается сверху своей ветки, descendants — по уровням ниже, а направленные линии явно соединяют parent с direct children. Карту можно перетаскивать, масштабировать вокруг курсора, вписывать целиком и открывать нужную ветку через мини-карту; клавиатура поддерживает стрелки, `Shift + стрелки`, `+`, `-`, `0` и `Home`. Рабочая область вычисляет доступную высоту окна и не обрезает canvas снизу. Поиск, выбор узла, путь до root и смена одного direct parent являются только редактором topology; pan/zoom viewport, сжатая таблица, свободное позиционирование и ввод referral code не являются persistence-контрактом. В persistence Hub остаются только account identity и nullable `referrer_account_id`; viewport, координаты, layout и project-specific codes не сохраняются.
+
 Referral-aware action ОБЯЗАН иметь `account_mode: "one_or_more"`, `compatibility.hub: ">=0.6.5"` и объект следующей точной формы:
 
 ```json
@@ -404,7 +422,7 @@ Runner фиксирует revision графа при admission, выдаёт т�
 
 Backend CAS отклоняет stale revision, duplicate/unknown/missing ID, self-link и цикл до перешифрования. Re-import сохраняет parent-связь, удаление parent отсоединяет прямых children, plaintext export топологию не включает.
 
-Host 0.6.5 выполняет первичный admission-preflight до постановки run в очередь: проверяет состояние Vault, выбранные аккаунты и non-secret configured-флаги каждого объявленного account/global resource, а UI сразу показывает конкретный недостающий тип. При существующем закрытом Vault одиночный start и batch start возвращают `423 Locked` до создания или replay-проекции run. После получения execution slot runner повторно расшифровывает и проверяет обязательные значения до создания subprocess. Независимо от обоих host checks entrypoint ОБЯЗАН повторить fail-closed проверку выданных значений до первого network/browser/write side effect.
+Host 0.6.8 выполняет первичный admission-preflight до постановки run в очередь: проверяет состояние Vault, выбранные аккаунты и non-secret configured-флаги каждого объявленного account/global resource, а UI сразу показывает конкретный недостающий тип. При существующем закрытом Vault одиночный start и batch start возвращают `423 Locked` до создания или replay-проекции run. После получения execution slot runner повторно расшифровывает и проверяет обязательные значения до создания subprocess. Независимо от обоих host checks entrypoint ОБЯЗАН повторить fail-closed проверку выданных значений до первого network/browser/write side effect.
 
 `actions[].resources` и `presentation` пока остаются optional в runtime-валидаторе только для legacy-пакетов. Приёмка нового пакета без них ЗАПРЕЩЕНА.
 
@@ -432,6 +450,8 @@ Host 0.6.5 выполняет первичный admission-preflight до пос
 - необязательное поле ОБЯЗАНО иметь безопасный `default` правильного типа; required-поле МОЖЕТ не иметь default, только если без явного выбора пользователя действительно нельзя безопасно продолжать;
 - неизвестные option values, missing required, типы, enum, numeric bounds/step и string lengths backend проверяет до доступа к Vault; entrypoint повторяет предметную проверку до side effect;
 - secrets, адреса доверенных contracts/RPC, chain ID для подписи и иные security-critical policy values через options ЗАПРЕЩЕНЫ.
+
+Option-copy говорит с пользователем, а не повторяет schema: `title` коротко называет выбор, `description` объясняет его эффект и безопасный ориентир, `placeholder` показывает только несекретный формат, `enum_labels` читаются как нормальные варианты ответа. Текст вида «введите integer», «укажите payload», «выберите action scope» или голая техническая константа без объяснения ЗАПРЕЩЕНЫ.
 
 `x-ui` — обязательная presentation-метаинформация каждого поля:
 
@@ -724,10 +744,11 @@ for level in context.referral_levels:
 
 `reviewed` и `reconciled` — не protocol/account statuses плагина, а состояния **всего run**, которые создаёт только Hub по действию оператора:
 
-- `failed` означает известную локальную ошибку без неоднозначного внешнего write. Такой run не должен удерживать safety lease, его разрешено повторить. После чтения журнала оператор может отметить ошибку просмотренной: Hub меняет run на `reviewed`, убирает его из текущего alert, но сохраняет error, events, results и account states в истории. Review отклоняется, если у failed run вопреки инварианту остался lease;
-- `needs_attention` означает, что внешний итог потенциального write не доказан. Run удерживает safety lease, и повтор того же account/scope блокируется. Только после реальной внешней проверки и точного подтверждения `RECONCILED` Hub меняет run на `reconciled` и снимает leases.
+- review разрешён для известной terminal-ошибки без неоднозначного внешнего write и без safety lease: это run-level `failed` либо terminal run, в котором сохранились известные account-level `partial`/`failed`/`blocked` или неисторический `unknown` (`stage` не `historical`/`reconciled`). После чтения журнала оператор может отметить такой итог просмотренным: Hub меняет run на `reviewed`, убирает его из текущего alert и разрешает rerun, но сохраняет исходные `error`, events, results и account states в истории. Review идемпотентен и отклоняется при `needs_attention` или любом lease;
+- `needs_attention` означает, что внешний итог потенциального write, cleanup или recovery не доказан. Run удерживает safety lease, и повтор того же account/scope блокируется. Только после реальной внешней проверки и точного подтверждения `RECONCILED` Hub меняет run на `reconciled` и снимает leases;
+- если один run одновременно содержит известные account-level ошибки и хотя бы одну ветку `needs_attention`/lease ambiguity, review ЗАПРЕЩЁН: смешанный случай целиком требует reconciliation и точного `RECONCILED`.
 
-Плагин ЗАПРЕЩЕНО эмитить `reviewed` или `reconciled`, использовать их в `context.result(status=...)` или изображать review как reconciliation. Просмотр известной ошибки не является утверждением об успехе и не переписывает исторический failed account outcome.
+Плагин ЗАПРЕЩЕНО эмитить `reviewed` или `reconciled`, использовать их в `context.result(status=...)` или изображать review как reconciliation. Просмотр известной ошибки не является утверждением об успехе и не переписывает исторический run/account outcome; это только закрытие живого уведомления с сохранением доказательств.
 
 ### 8.2. Stage, message и progress
 
@@ -808,6 +829,46 @@ Return summary ОБЯЗАНА быть агрегатной, например:
 
 Summary не заменяет terminal `account_state`.
 
+### 9.1. Parsing и таблица статистики
+
+**Parsing** — это не отдельный runtime, protocol event или особый класс риска. Это обычный action с `risk: "read"` и `account_mode: "one_or_more"`, который читает внешнее или локальное состояние без любой мутации. Логин с созданием сессии, POST/PUT/PATCH/DELETE, claim, browser click/submit, подпись или транзакция больше не являются Parsing и требуют честный write-risk.
+
+Для вывода одной строки на каждый выбранный кошелёк action МОЖЕТ объявить:
+
+```json
+{
+  "output": {
+    "mode": "account_table",
+    "title": "Статистика аккаунтов",
+    "primary_kind": "account_snapshot",
+    "columns": [
+      {"key": "points", "title": "Очки", "type": "integer", "aggregate": "sum"},
+      {"key": "rank", "title": "Ранг", "type": "integer", "aggregate": "avg"},
+      {"key": "eligible", "title": "Допущен", "type": "boolean"}
+    ]
+  }
+}
+```
+
+`output` для этого режима имеет ровно четыре поля:
+
+- `mode` — строго `account_table`;
+- `title` — живое понятное название таблицы;
+- `primary_kind` — стабильный `snake_case` kind главного account-scoped result;
+- `columns` — от 1 до 12 уникальных колонок.
+
+Каждая колонка содержит `key`, `title`, `type` и необязательный `aggregate`. `key` указывает только на прямое поле объекта `result.data`; JSONPath, dotted path, вложенные объекты, массивы, raw response и user-defined HTML/template ЗАПРЕЩЕНЫ. Допустимые `type`: `string`, `integer`, `number`, `decimal_string`, `boolean`. `decimal_string` используется для точных больших или дробных значений, которые нельзя без потерь превращать в JavaScript number.
+
+`aggregate` может быть `sum`, `avg`, `min` или `max`, допустим только для `integer`, `number` и `decimal_string`. В одном `output` может быть не более четырёх колонок с `aggregate`.
+
+На каждый начатый кошелёк action ОБЯЗАН создать ровно один `context.result(..., kind=primary_kind, account_id=account.id, data={...})`. Его `status` ОБЯЗАН быть одним из `succeeded`, `partial`, `failed`, `skipped`, `blocked`, `needs_attention` и совпадать по смыслу с terminal `account_state`. Авторитетная строка живёт по системному lifecycle Hub и до завершения либо при отсутствии предметного результата может иметь также `queued`, `running`, `cancelled` или `unknown`. Предметный итог вроде `already_exists` или `not_eligible` записывается в обычную scalar-колонку, а не подменяет lifecycle.
+
+Hub сам добавляет в видимую строку label, публичный EVM address, авторитетный lifecycle status и время. Автор не дублирует эти поля в `columns`. Сводку success/partial/error Hub строит по `run_account_states`, а не по тексту log, title или произвольному plugin status.
+
+Схема `output` фиксируется в snapshot запуска: обновление, rollback или удаление софта не меняет смысл исторической таблицы. Изменение `primary_kind`, смысла ключа, его типа или агрегации — breaking change схемы и требует нового kind либо major-версии софта.
+
+Вкладка **Результаты** показывает account table, поиск по label/address, фильтр lifecycle status и объявленные агрегаты. Полную видимую проекцию до 2 000 строк можно скачать как formula-safe CSV; если report response помечен `truncated`, Hub ОБЯЗАН заблокировать CSV, а не экспортировать неполный набор. В строковых ячейках первый `=`, `+`, `-`, `@`, tab, CR или LF нейтрализуется ведущим апострофом. Schema-typed `integer`, `number` и `decimal_string` сохраняются числами без апострофа, поэтому корректное отрицательное значение не превращается в текст. Это деклассификация метаданных: export доступен только при открытом Vault, не включает произвольные undeclared payload fields и после скачивания больше не защищён Vault.
+
 ## 10. Безопасное логирование и скачиваемый журнал
 
 ### 10.1. Абсолютное правило автора
@@ -829,11 +890,11 @@ Summary не заменяет terminal `account_state`.
 
 Исключения сторонних SDK ОБЯЗАНЫ переводиться в стабильные безопасные коды, например `adspower_unavailable`, а не интерполироваться через `f"{error}"`. Raw exception разрешено использовать только в локальном тесте без реальных secrets.
 
-Это требование включает внешнюю границу entrypoint. Bootstrap 0.6.5 при необработанном исключении формирует failed-message из имени и текста exception и печатает traceback в stderr; redactor после этого является лишь последней защитой. Поэтому production-entrypoint ОБЯЗАН перехватить ожидаемые ошибки клиентов/SDK, классифицировать их в заранее определённый safe code/message без raw exception и завершить lifecycle каждого уже начатого аккаунта. Неизвестное исключение нельзя интерполировать или помещать в `data`; его безопасно классифицируют общим кодом, а детальную диагностику воспроизводят без production secrets. `except Exception: pass` и ложный success ЗАПРЕЩЕНЫ.
+Это требование включает внешнюю границу entrypoint. Bootstrap 0.6.8 при необработанном исключении формирует failed-message из имени и текста exception и печатает traceback в stderr; redactor после этого является лишь последней защитой. Поэтому production-entrypoint ОБЯЗАН перехватить ожидаемые ошибки клиентов/SDK, классифицировать их в заранее определённый safe code/message без raw exception и завершить lifecycle каждого уже начатого аккаунта. Неизвестное исключение нельзя интерполировать или помещать в `data`; его безопасно классифицируют общим кодом, а детальную диагностику воспроизводят без production secrets. `except Exception: pass` и ложный success ЗАПРЕЩЕНЫ.
 
 ### 10.2. Defense-in-depth Hub
 
-Скачиваемый технический журнал 0.6.5:
+Скачиваемый технический журнал 0.6.8:
 
 - доступен через token-authenticated endpoint конкретного run и является одним общим журналом софта по всем выбранным аккаунтам, а не набором per-account файлов;
 - сохраняет единый порядок событий run; account-scoped событие связывается с аккаунтом через `account_id` и безопасный snapshot `account_label`;
@@ -1206,6 +1267,8 @@ Unlimited approval, permit, arbitrary signature и blind signing для ново
 - нормальная работа не требует открыть technical log;
 - `input()`, terminal prompt, ручное редактирование config и просьба установить Python пользователю ЗАПРЕЩЕНЫ.
 
+Тон интерфейса — прямой, спокойный и человеческий. Допустимо «Выберите аккаунты», «Софт уже работает», «Не хватает прокси». Не допускаются холодные конструкции вроде «lifecycle-проекция недоступна», искусственные англоязычные badges и ложная специализация общего риска: например, `external_write` нельзя всегда описывать как изменение waitlist, если действие может менять другой внешний сервис. Обязательные security-фразы и `action.confirmation_phrase` остаются точными и не упрощаются.
+
 Иконка и обложка не должны имитировать системные кнопки Hub и не должны содержать status badge, который устареет.
 
 ## 16. Сборка, checksums и GitHub release
@@ -1246,12 +1309,23 @@ Builder не импортирует entrypoint, не создаёт plugin `.ven
 6. Обычный source archive GitHub не является пакетом Hub.
 7. Asset не заменяется после публикации; исправление выпускается новой SemVer.
 8. Release notes ОБЯЗАНЫ содержать SHA-256, список изменений, новые permissions/resources и migration/reconciliation notes.
+9. Manifest `version`, release tag и единственная SemVer в имени asset ОБЯЗАНЫ обозначать одну версию; неоднозначное имя или конфликт tag/filename блокирует безопасное сравнение.
 
 Patch Radar просматривает не более первых 100 public repositories владельца и читает latest release metadata. Он не подтверждает личность автора и не подписывает пакет.
 
+При первой GitHub-установке core скачивает и инспектирует архив, после чего сохраняет неизменяемую привязку `owner/repository ↔ plugin id` и для конкретной версии — release tag, asset name/URL и archive SHA-256. Renderer не назначает эту identity. После появления привязки Radar сравнивает candidate с активной установленной SemVer и показывает одно из состояний:
+
+- exact version — уже установлена, повторная кнопка установки не показывается;
+- newer candidate — доступно обновление;
+- newer installed — candidate является downgrade, установка блокируется;
+- version unknown — release/tag/filename нельзя надёжно сопоставить, установка блокируется до исправления metadata;
+- identity conflict — repository, plugin id или release asset противоречат сохранённой привязке, установка блокируется.
+
+Новый непривязанный repository остаётся installable только как первичная инспектируемая установка. После download manifest остаётся окончательным источником `id/version`: несогласованная identity отклоняется, а уже известная версия может быть только реактивирована при exact совпадении archive SHA-256. Публиковать другое содержимое под прежней версией, tag или asset identity ЗАПРЕЩЕНО; это не update, а immutable-payload conflict.
+
 ## 17. Что проверяет Hub, а что остаётся обязанностью автора
 
-| Контроль | Автоматически в текущем коде 0.6.5 | Обязанность автора/приёмки |
+| Контроль | Автоматически в текущем коде 0.6.8 | Обязанность автора/приёмки |
 |---|---|---|
 | Manifest shape и неизвестные поля | Да; `/3` требует `contract_version` и strict-поля | Не использовать admission legacy-манифеста как послабление. |
 | Presentation paths/payload/byte limits | Да; `/3` требует `presentation`, legacy может его не иметь | Геометрия, статичность, metadata и качество проверяются acceptance review. |
@@ -1268,6 +1342,8 @@ Patch Radar просматривает не более первых 100 public r
 | Result semantics | Проверяются JSON/bounds, redaction и принадлежность `account_id` | Стабильный `kind/data`, один финальный предметный итог и согласованность с lifecycle. |
 | Log redaction/export bounds | Да, defense-in-depth | Никогда не эмитить secret; redactor не DLP. |
 | Leases и force-stop ambiguity | Да по объявленному risk | Идемпотентность, durable external truth и reconciliation. |
+| Review известных terminal/account errors | Да без удаления error/events/results/account states; `needs_attention`, lease и mixed ambiguity не допускаются | Не путать просмотр с reconciliation и не объявлять исходный outcome успешным. |
+| GitHub source/version identity | Да после первой core-inspected установки: repository↔id, SemVer state и immutable archive hash | Согласовать manifest/tag/filename, не переиспользовать version/payload и публиковать новую SemVer для любого изменения. |
 | Python environment | Version-local `.venv` и marker | Pinning, supply-chain audit, platform wheels. |
 | OS/network isolation | Нет | Устанавливать только доверенный код; не заявлять наличие sandbox. |
 
@@ -1278,7 +1354,7 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] Builder завершается успешно без ручной правки ZIP.
 - [ ] Архив устанавливается в чистый data directory.
 - [ ] Manifest явно содержит `contract_version: SH-SOFTWARE-0.6/3`; отсутствие marker или `/1` не используется для нового релиза.
-- [ ] `id` постоянен, version увеличена, compatibility.hub не ниже `>=0.6.5`.
+- [ ] `id` постоянен, version увеличена, compatibility.hub не ниже `>=0.6.5`, а при наличии `action.output` — не ниже `>=0.6.8`.
 - [ ] В ZIP нет wrapper directory.
 - [ ] В ZIP присутствуют manifest, generated checksums, requirements, icon, image и entrypoint.
 - [ ] Icon и image непустые и статические; icon квадратный, image корректно кадрируется, рекомендуемые `512×512` и `1600×900` соблюдены либо отступление визуально проверено.
@@ -1292,6 +1368,7 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] Icon и image загружаются после локальной и GitHub-установки.
 - [ ] Assets читаемы в light/dark theme и при crop/responsive layout.
 - [ ] Каждое действие и option понятны без technical log; у каждого option есть `title`, `description` и полный `x-ui` как минимум с `group/order`.
+- [ ] Весь видимый manifest-copy прочитан редактором: живой русский язык, активный залог, короткие предложения, нет внутренних `module/action/payload/lifecycle/scope/permission/lease/venv` и англоязычных заглушек.
 - [ ] `x-ui.order` уникальны, enum имеют полный `enum_labels`, а одна group не смешивает primary/advanced.
 - [ ] На основном уровне не более 7 параметров (целевой диапазон содержательной формы — 5–7); редкие настройки находятся в понятной advanced-группе.
 - [ ] Safe defaults позволяют batch launch без бессмысленного обязательного числа.
@@ -1330,6 +1407,9 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] Долгое ожидание показывает heartbeat/stage с неизменным progress; тест подтверждает отсутствие таймерного «доползания».
 - [ ] Неотправленный terminal event виден как `unknown`, а не ложный success.
 - [ ] Каждый начатый аккаунт с предметным итогом имеет ровно один финальный account-scoped result; `kind/data` стабильны и status согласован с terminal account state.
+- [ ] Parsing-action остаётся чистым `read`/`one_or_more`; любая мутация переклассифицирована в правильный write-risk.
+- [ ] `output` с `mode: account_table`, если объявлен, имеет 1..12 прямых scalar-колонок, не более четырёх numeric aggregates и ровно один `primary_kind` result на каждый начатый кошелёк.
+- [ ] CSV статистики блокируется при `truncated`, не содержит undeclared fields, нейтрализует formula-like строковые ячейки и сохраняет schema-typed числа числами.
 - [ ] Summary содержит только агрегаты и совпадает с account states.
 
 ### 18.5. Логи и секреты
@@ -1351,13 +1431,14 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] Retry чтения bounded; write не повторяется без внешней проверки.
 - [ ] Duplicate API response/reconnect не создаёт повторную операцию.
 - [ ] Reconcile action только читает и различает `confirmed/not_found/unknown`.
-- [ ] Известный `failed` run не имеет lease, после просмотра становится `reviewed`, исчезает из текущего alert, допускает rerun и сохраняет error/events/results/account states.
-- [ ] `needs_attention` нельзя закрыть review-механикой: только внешняя проверка и точное `RECONCILED` дают `reconciled` и снимают lease.
+- [ ] Известный terminal run-level либо account-level `partial`/`failed`/`blocked`/неисторический `unknown` без lease после просмотра становится `reviewed`, исчезает из текущего alert, допускает rerun и сохраняет исходные error/events/results/account states; повторный review идемпотентен.
+- [ ] `needs_attention`, любой safety lease и смешанный run с известной ошибкой плюс неоднозначной веткой нельзя закрыть review-механикой: только внешняя проверка и точное `RECONCILED` дают `reconciled` и снимают lease.
 - [ ] Reconcile работает без logs/options/scratch/summary предыдущего run либо честно возвращает `unknown`.
 - [ ] После Hub restart неоднозначный run остаётся требующим сверки.
 
 ### 18.7. Реферальная сеть
 
+- [ ] UI строит topology как rooted forest: roots сверху, descendants по уровням, каждая direct parent→child связь видна линией; поиск/выбор узла и inspector не сжимают карту до нечитабельной таблицы.
 - [ ] `POST /api/accounts/referral-topology` требует full coverage текущих accounts и валидный `expected_revision`; duplicate/missing/unknown/self/cycle/stale CAS отклоняют весь batch.
 - [ ] Re-import сохраняет parent-связь; удаление parent отсоединяет прямых children; plaintext export не содержит топологию.
 - [ ] Upgrade migration при unlock безвозвратно удаляет legacy own/external code fields, сохраняет валидные Hub-parent links и не ставит marker при rollback.
@@ -1383,9 +1464,10 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] Prepare проходит в чистом managed Python 3.12 environment.
 - [ ] Все зависимости pinned и прошли vulnerability/license review.
 - [ ] Нет runtime download/self-update/post-install surprise.
-- [ ] Протестирована каждая ОС из `compatibility.os`.
-- [ ] Native wheels соответствуют OS и архитектуре.
-- [ ] Плагин не зависит от system Python, shell PATH и библиотек core Hub.
+- [ ] Финальный пакет установлен и запущен из installed path на каждом target из `compatibility.os`: macOS arm64 для `darwin`, Windows 10/11 x64 для `win32`.
+- [ ] Windows native dependencies доступны как бинарные `cp312-win_amd64` wheels; пакет не требует compiler/build toolchain на компьютере пользователя.
+- [ ] Плагин не зависит от system Python, Node.js, Git, Microsoft Visual C++ Redistributable, shell PATH и библиотек core Hub.
+- [ ] На обеих заявленных платформах stop/force-stop не оставляет detached child process; неоднозначный write после OS-specific force termination требует reconciliation.
 
 ### 18.10. Release
 
@@ -1393,9 +1475,9 @@ Patch Radar просматривает не более первых 100 public r
 - [ ] SHA-256 asset зафиксирован после тестов.
 - [ ] GitHub repository оканчивается на `.patch`.
 - [ ] Latest Release содержит ровно один `.softhub[.zip]` asset.
-- [ ] Tag/version/asset filename согласованы.
+- [ ] Manifest version, tag и версия в asset filename согласованы и однозначно сравниваются по SemVer.
 - [ ] Release notes перечисляют permissions/resources/risk changes.
-- [ ] Опубликованный asset не перезаписывается.
+- [ ] Опубликованный version/tag/asset payload не перезаписывается и не переиспользуется с другим SHA-256; любое изменение получает новую SemVer.
 
 ## 19. Безусловные причины отклонения пакета
 
@@ -1417,17 +1499,17 @@ Patch Radar просматривает не более первых 100 public r
 14. Есть незакреплённые или недоверенные зависимости, runtime download либо критичная известная уязвимость.
 15. Нет теста чистой установки, missing-resource preflight, stop, log privacy и заявленных платформ.
 16. Изменён payload без увеличения SemVer или перезаписан опубликованный release asset.
-17. Пакет требует ручной установки Python/редактирования config/терминала для штатного сценария.
+17. Пакет требует ручной установки Python, Node.js, Git, VC++ runtime, compiler, редактирования config или терминала для штатного сценария.
 18. Автор заявляет OS/network sandbox, цифровую подпись издателя или безопасность, которых Hub фактически не обеспечивает.
 19. Новый пакет не объявляет `contract_version: SH-SOFTWARE-0.6/3` либо пытается пройти как legacy.
 20. Options не имеют закрытого strict root, primitive schema, bounds/`maxLength` или обязательного `x-ui`, либо форма содержит секрет/security-critical policy.
-21. Не определена стабильная result schema или progress тестируется только переходом `0 → 100`.
+21. Не определена стабильная result schema, `output` с `mode: account_table` ссылается на вложенные/raw/секретные данные или progress тестируется только переходом `0 → 100`.
 22. Referral-aware action имеет Hub compatibility ниже `>=0.6.5`, неполный `action.referral`, несовпадающие parent grants/resources, выбирает parent в обход `context.referrals`, немедленно не вызывает `protect_secret` либо persist-ит/раскрывает code; любой `/3` action принимает manual referral/invite code через option.
 23. Account-action не объявляет reserved `account_concurrency`, превышает HTTP `20`/browser `5`, включает поле в `required`, игнорирует `context.account_concurrency` или оставляет workers/sessions после cancel.
 
 ## 20. Definition of Done
 
-Софт считается готовым к вшиванию в Soft Hub 0.6.5 только когда одновременно:
+Софт считается готовым к вшиванию в Soft Hub 0.6.8 только когда одновременно:
 
 - выполнены все MUST/MUST NOT этого документа;
 - пройден весь checklist раздела 18;
@@ -1479,7 +1561,8 @@ project code сам и немедленно вызови context.protect_secret(
 До сдачи собери пакет только scripts/build_plugin.py, установи финальный архив
 в чистый data directory и пройди весь checklist раздела 18, включая missing-resource,
 canary-secret, cancel/force-stop, ambiguous-write/reconciliation, concurrency,
-failed-review без lease, чистую установку и заявленные OS. Проведи dependency audit.
+known-error review без lease, mixed ambiguity, чистую installed-package установку и заявленные OS/architecture.
+Для Windows используй только совместимые cp312-win_amd64 wheels. Проведи dependency audit.
 
 В ответе приложи:
 1. путь к финальному .softhub.zip и его SHA-256;

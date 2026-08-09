@@ -1,6 +1,6 @@
-# Практический контракт плагина Soft Hub 0.6.5
+# Практический контракт плагина Soft Hub 0.6.8
 
-Этот документ — инструкция для автора нового софта под Soft Hub 0.6.5 и контракт `SH-SOFTWARE-0.6/3`. Он описывает фактически реализованный контракт, а не желаемую будущую платформу. Источники истины в репозитории:
+Этот документ — инструкция для автора нового софта под Soft Hub 0.6.8 и контракт `SH-SOFTWARE-0.6/3`. Он описывает фактически реализованный контракт, а не желаемую будущую платформу. Источники истины в репозитории:
 
 - `soft_hub/plugins.py` — проверка манифеста, ZIP-пакета, установка, подготовка окружения и откат;
 - `soft_hub/sdk.py` — объекты `HubContext`, `HubAccount` и методы событий;
@@ -10,7 +10,7 @@
 - `examples/hello-soft/` — минимальный рабочий пример;
 - `scripts/build_plugin.py` — штатная сборка `.softhub.zip`.
 
-Важно: JSON Schema сейчас не исполняется как отдельный движок при установке. Установщик и штатный builder вызывают строгий `validate_manifest()` из `plugins.py`, а schema нужна редактору и авторским проверкам. Новый пакет обязан объявить `"contract_version": "SH-SOFTWARE-0.6/3"` и `compatibility.hub: ">=0.6.5"`. Уже выпущенные `/2` и пакеты без marker остаются legacy-совместимыми, но выпускать новую версию с `/2` или без marker запрещено. При расхождении `/3`, schema, validator, SDK или tests выпуск останавливается — legacy-совместимость не имеет приоритета над новым контрактом.
+Важно: JSON Schema сейчас не исполняется как отдельный движок при установке. Установщик и штатный builder вызывают строгий `validate_manifest()` из `plugins.py`, а schema нужна редактору и авторским проверкам. Новый пакет обязан объявить `"contract_version": "SH-SOFTWARE-0.6/3"` и `compatibility.hub: ">=0.6.5"`; пакет с `action.output` обязан поднять эту границу до `>=0.6.8`. Уже выпущенные `/2` и пакеты без marker остаются legacy-совместимыми, но выпускать новую версию с `/2` или без marker запрещено. При расхождении `/3`, schema, validator, SDK или tests выпуск останавливается — legacy-совместимость не имеет приоритета над новым контрактом.
 
 ## 1. Модель плагина
 
@@ -71,13 +71,13 @@ Builder валидирует manifest и source denylist, но не импорт
 
 ### 2.1. Публикация патча в GitHub
 
-Hub 0.6.5 не забирает source archive ветки и не собирает плагин на машине пользователя. Публикуйте ровно тот `.softhub.zip`, который собрал штатный builder:
+Hub 0.6.8 не забирает source archive ветки и не собирает плагин на машине пользователя. Публикуйте ровно тот `.softhub.zip`, который собрал штатный builder:
 
 1. Поднимите SemVer в `hub.plugin.json` и соберите новый архив.
 2. Прогоните тесты и локальную установку именно этого файла.
-3. Создайте GitHub Release с tag, соответствующим версии, например `v1.3.0`.
-4. Прикрепите архив как **Release asset**, а не кладите его только в Git-дерево.
-5. Опубликуйте SHA-256 asset в release notes и не заменяйте файл под уже опубликованным tag.
+3. Создайте GitHub Release с tag, строго соответствующим manifest SemVer, например `v1.3.0`.
+4. Прикрепите архив с той же версией в имени, например `example-1.3.0.softhub.zip`, а не кладите его только в Git-дерево.
+5. Опубликуйте SHA-256 asset в release notes. Никогда не заменяйте payload под существующими tag/version: Hub отклонит ту же версию с другим hash.
 
 Для автовыбора release должен содержать ровно один asset с case-insensitive суффиксом `.softhub.zip` или `.softhub`. Если таких assets несколько, Hub попросит прямую ссылку. Если таких assets нет, обычная GitHub-установка может выбрать ровно один `.zip` fallback. Поддерживаются:
 
@@ -88,7 +88,7 @@ https://github.com/owner/repository/releases/tag/v1.3.0
 https://github.com/owner/repository/releases/download/v1.3.0/example-1.3.0.softhub.zip
 ```
 
-В 0.6.5 repository и release должны быть public. Не передавайте GitHub token в URL, опциях плагина или архиве: private repositories и token-based GitHub access не поддерживаются. Публикация на GitHub не заменяет подпись издателя: Hub проверяет целостность пакета, но не личность GitHub-автора.
+В 0.6.8 repository и release должны быть public. Не передавайте GitHub token в URL, опциях плагина или архиве: private repositories и token-based GitHub access не поддерживаются. После первой установки Hub связывает repository с inspected module id, version, asset и hash; одинаковая версия больше не предлагается, downgrade и identity conflict блокируются. Это не заменяет подпись издателя: Hub проверяет последовательность identity/целостности, но не личность GitHub-автора.
 
 #### Автообнаружение через Patch Radar
 
@@ -163,7 +163,7 @@ plugin/
     }
   },
   "compatibility": {
-    "hub": ">=0.6.5",
+    "hub": ">=0.6.8",
     "python": ">=3.12,<3.13",
     "os": ["darwin"]
   },
@@ -193,6 +193,15 @@ plugin/
       "account_mode": "one_or_more",
       "permissions": {"secrets": ["proxy"]},
       "resources": {"account": ["proxy"], "settings": []},
+      "output": {
+        "mode": "account_table",
+        "title": "Статистика аккаунтов",
+        "primary_kind": "account_snapshot",
+        "columns": [
+          {"key": "points", "title": "Очки", "type": "integer", "aggregate": "sum"},
+          {"key": "eligible", "title": "Допущен", "type": "boolean"}
+        ]
+      },
       "options": {
         "type": "object",
         "properties": {
@@ -302,11 +311,11 @@ UI должен получать картинку только через host-o
 
 ### 4.3. Compatibility
 
-- `compatibility.hub` сейчас поддерживает только форму `>=x.y.z`; для `/3` минимум — `>=0.6.5`. Legacy default `>=0.1.0` не разрешён новому пакету. Установка отклоняется, если текущий Hub ниже указанной версии.
+- `compatibility.hub` сейчас поддерживает только форму `>=x.y.z`; для `/3` минимум — `>=0.6.5`, а для любого пакета с `action.output` — `>=0.6.8`. Legacy default `>=0.1.0` не разрешён новому пакету. Установка отклоняется, если текущий Hub ниже указанной версии.
 - `compatibility.os` должен быть непустым списком значений из `darwin`, `win32`, `linux`.
 - `compatibility.python` предусмотрен schema и полезен как документация.
 
-Ограничения MVP: установщик проверяет допустимость значений `os`, но не сверяет список с текущей ОС. Поле `python` тоже не исполняется, а поля архитектуры нет. Основной поставляемый desktop artifact 0.6.5 — macOS arm64 с managed CPython 3.12.13 внутри `Soft Hub.app`; системный Python пользователя не участвует. В репозитории есть Windows x64 build target, но это не доказательство готовности конкретного плагина/native wheels; packaged Linux target отсутствует. В dev-режиме используется Python, которым запущен Hub. Указывайте только реально протестированные OS и делайте fail-closed runtime check до side effect.
+Ограничения MVP: установщик проверяет допустимость значений `os`, но не сверяет список с текущей ОС. Поле `python` тоже не исполняется, а поля архитектуры нет. Desktop artifacts 0.6.8 — macOS arm64 и Windows x64 с managed CPython 3.12.13; системный Python пользователя не участвует. Наличие Windows target Hub не доказывает готовность конкретного плагина. Для каждой заявленной платформы автор обязан проверить installed package и наличие binary wheels: CPython 3.12 macOS arm64 и `cp312/win_amd64` для Windows x64. Hub не компилирует native dependency на машине пользователя; packaged Linux target отсутствует. В dev-режиме используется Python, которым запущен Hub. Указывайте только реально протестированные OS и делайте fail-closed runtime check до side effect.
 
 ### 4.4. Runtime
 
@@ -318,7 +327,7 @@ UI должен получать картинку только через host-o
 | `state_model` | `stateless`, `resumable` или `externally_reconciled`. Сейчас это декларация; Hub не предоставляет checkpoint API. |
 | `requirements` | Необязательный безопасный относительный путь к файлу внутри пакета. |
 | `safe_stop` | Если строго `true`, UI/API разрешают остановку и посылают SIGTERM/terminate. Это обещание автора, а не автоматическая гарантия. |
-| `heartbeat_seconds` | Допускается schema в диапазоне 5..300, но runner 0.6.5 не использует поле как watchdog, не убивает зависший процесс и не реализует resume. Heartbeat показывает активность, а не выполненную работу. |
+| `heartbeat_seconds` | Допускается schema в диапазоне 5..300, но runner 0.6.8 не использует поле как watchdog, не убивает зависший процесс и не реализует resume. Heartbeat показывает активность, а не выполненную работу. |
 
 Не объявляйте `safe_stop: true`, пока код не проверяет отмену, не прекращает создание новой работы и не оставляет внешнее состояние однозначным или восстанавливаемым.
 
@@ -361,6 +370,29 @@ Runner выдаёт выбранным аккаунтам только прав�
 - точный `permissions.secrets`;
 - точный `resources` с массивами `account` и `settings` (они могут быть пустыми);
 - обязательный для `/3` закрытый объект `options`, даже если `properties` пуст.
+
+`output` необязателен. Он не меняет права и риск action, а только даёт Hub безопасную схему отображения results. Для Parsing-действия укажите `risk: "read"`, `account_mode: "one_or_more"` и объект:
+
+```json
+{
+  "output": {
+    "mode": "account_table",
+    "title": "Статистика аккаунтов",
+    "primary_kind": "account_snapshot",
+    "columns": [
+      {"key": "points", "title": "Очки", "type": "integer", "aggregate": "sum"},
+      {"key": "balance", "title": "Баланс", "type": "decimal_string", "aggregate": "sum"},
+      {"key": "eligible", "title": "Допущен", "type": "boolean"}
+    ]
+  }
+}
+```
+
+Этот контракт появился в Hub 0.6.8. Если хотя бы одно действие объявляет `output`, top-level `compatibility.hub` ОБЯЗАН быть не ниже `>=0.6.8`.
+
+Здесь нет произвольной UI-схемы: `output` содержит ровно `mode`, `title`, `primary_kind`, `columns`. `mode` — только `account_table`; `columns` — 1..12 колонок с уникальными прямыми `data` keys. Разрешены типы `string`, `integer`, `number`, `decimal_string`, `boolean`. Необязательный `aggregate` равен `sum`, `avg`, `min` или `max`, допустим только для числовых типов; агрегатов может быть не более четырёх.
+
+Hub сам добавляет label, EVM address, авторитетный lifecycle status и время. Не дублируйте их в `columns`. Не используйте dotted keys, JSONPath, вложенные объекты/массивы, raw HTTP/DOM или секретные данные. Если сценарий создаёт сессию, отправляет POST, нажимает submit, делает claim или подписывает что-либо, это не Parsing/read — выберите соответствующий write-risk.
 
 Для нового контракта `/3` `resources` означает «без этого значения действие заведомо не может стартовать», а permission означает «это значение разрешено передать». Доступные requirements:
 
@@ -436,6 +468,8 @@ Installer и builder валидируют strict `/3` schema. До доступ�
 
 Strict validator запрещает более 7 primary-параметров (`advanced` отсутствует или `false`); для содержательной формы целитесь в 5–7. Редкие настройки группируйте и помечайте `advanced: true`; если форма остаётся длинной, разделите сценарий на actions. `title`/`description` должны объяснять эффект, единицы, безопасный default и риск, а не требовать от пользователя угадать техническое число.
 
+Пишите весь видимый manifest-copy как часть одного живого русского интерфейса. Используйте активный залог и 1–2 коротких предложения: сначала объясните, что сделает софт, потом — что выбрать или проверить. Не показывайте пользователю внутренние слова `module`, `action`, `payload`, `lifecycle`, `scope`, `permission`, `lease`, `venv`, если без них можно сказать «софт», «запуск», «данные», «статус», «доступ» или «окружение». Не используйте англоязычные заглушки, канцелярит и обещания успеха до подтверждённого результата. Hub не переписывает `presentation.description`, `action.description` и option-copy на лету, поэтому неудачный текст пакета будет виден как есть и считается дефектом приёмки.
+
 Options принадлежат только одному run и не являются persistent config. One-click batch берёт manifest defaults; required boolean может получить `false`, required string enum — первое значение. Иное required-поле без default блокирует batch и требует отдельного запуска через форму. Никогда не рассчитывайте на параметры предыдущего run.
 
 `account_concurrency` — зарезервированная host option `/3`. Она обязательна у каждого action с `account_mode: "one_or_more"` и запрещена при `account_mode: "none"`. Поле имеет ровно `type`, `title`, `description`, `default`, `minimum`, `maximum`, `multipleOf`, `x-ui`:
@@ -500,7 +534,7 @@ Bootstrap вызывает sync-функцию напрямую, а awaitable в
 
 Пути передаются строками. Для ресурсов пакета используйте `Path(context.plugin_root)`. Для временных артефактов одного запуска — `Path(context.scratch_dir)`. Не рассчитывайте на cwd исходного проекта и не делайте глобальный `os.chdir()`.
 
-Текущий Hub не чистит scratch автоматически и не импортирует оттуда результаты. Не сохраняйте там plaintext secrets; нужный пользователю результат отправляйте событием. Стабильного `plugin_data_dir`, общего для версий, в SDK 0.6.5 нет.
+Текущий Hub не чистит scratch автоматически и не импортирует оттуда результаты. Не сохраняйте там plaintext secrets; нужный пользователю результат отправляйте событием. Стабильного `plugin_data_dir`, общего для версий, в SDK 0.6.8 нет.
 
 ### 5.2. `HubAccount`
 
@@ -522,7 +556,7 @@ account.secret("evm_private_key")
 
 В `/3` реферального кода в `HubAccount` нет. `referrer_account_id` — safe direct-parent ID, а `referral_depth` — относительная глубина среди selected targets текущего plan, не абсолютная глубина полного Vault-графа. Сам объект parent берётся только через `context.referrals.parent_for(account.id)` либо из ограниченного `context.referrals.parents`; обходить эти границы поиском по labels/IDs запрещено.
 
-Hub 0.6.5 требует unlock до любого запуска и batch, в том числе при пустом `actions[].permissions.secrets`; locked start отвечает `423`. Legacy-манифест без action-level прав использует top-level `permissions.secrets`. При выборе аккаунтов metadata и secret bundles также формируются только из разблокированного Vault.
+Hub 0.6.8 требует unlock до любого запуска и batch, в том числе при пустом `actions[].permissions.secrets`; locked start отвечает `423`. Legacy-манифест без action-level прав использует top-level `permissions.secrets`. При выборе аккаунтов metadata и secret bundles также формируются только из разблокированного Vault.
 
 ### 5.2.1. `HubSettings`
 
@@ -602,6 +636,33 @@ context.result(
 
 Results переживают обновление и удаление модуля, поэтому payload должен оставаться небольшим и читаемым будущим renderer: публичные IDs/counters/tx hash допустимы, raw response, DOM/HAR, traceback и bulk event history — нет. Runner проверяет serializability/bounds, redaction и принадлежность `account_id`, но не доказывает смысл `kind/status`, их согласованность с terminal state или backward compatibility — это проверяет автор и acceptance tests. `reviewed`/`reconciled` являются operator-owned run statuses и никогда не эмитятся плагином как result/account status.
 
+Для `output.mode: "account_table"` на каждый начатый аккаунт нужен ровно один result с `kind`, равным `output.primary_kind`:
+
+```python
+context.result(
+    f"{account.label}: статистика собрана",
+    kind="account_snapshot",
+    status="succeeded",
+    account_id=account.id,
+    data={
+        "points": 42,
+        "balance": "123456789012345678.25",
+        "eligible": True,
+    },
+)
+context.account_state(
+    account.id,
+    status="succeeded",
+    stage="completed",
+    progress=1.0,
+    message="Статистика аккаунта собрана",
+)
+```
+
+Отправляйте в `data` только объявленные scalar fields с точными типами. Отсутствующее необязательное значение оставьте пустым по контракту; не подменяйте его строкой `"unknown"`, если колонка объявлена как число или boolean. Статусы таблицы остаются системными `succeeded`, `partial`, `failed`, `skipped`, `blocked`, `needs_attention`; проектный outcome храните в отдельной `string`-колонке.
+
+Hub ищет строки по label/address, фильтрует по авторитетному lifecycle status, считает до четырёх объявленных агрегатов и скачивает полную текущую проекцию как formula-safe CSV. При `truncated` (больше 2 000 строк) кнопка CSV блокируется: Hub не экспортирует неполную выборку. Строковые значения с первым `=`, `+`, `-`, `@`, tab, CR или LF получают ведущий апостроф; schema-typed `integer`, `number` и `decimal_string` остаются числами, включая отрицательные. Primary result принимает только `succeeded`, `partial`, `failed`, `skipped`, `blocked`, `needs_attention`; сама строка до завершения или при отсутствии предметного результата может показывать и системные `queued`, `running`, `cancelled`, `unknown` из `run_account_states`. Схема берётся из snapshot самого run, поэтому старая история не меняется после update/rollback/delete. Файл CSV больше не защищён Vault: не коммитьте и не отправляйте его без ручной проверки.
+
 Допустимые protocol event types:
 
 | Event | Назначение |
@@ -655,7 +716,7 @@ Runner перед записью событий пытается скрыть:
 
 Для project-runtime referral code действует отдельный порядок: **сразу после получения кода и до любого log/result/exception/print** вызовите `context.protect_secret(code)`. SDK отправляет host-процессу служебный control-frame с точным значением; frame не становится событием и нигде не сохраняется, но exact code кратковременно находится в памяти plugin- и host-процессов текущего run, чтобы Redactor мог вычищать последующий вывод. Bootstrap дополнительно пропускает последующие text/binary writes в plugin stderr (туда перенаправлен stdout) через локальный `context.sanitize_text`, уменьшая race между frame и случайным выводом. Это страховка, а не разрешение печатать код: raw print/log/result/summary/file запрещены; split/custom encoding, файл, сеть или вывод до регистрации могут обойти защиту.
 
-Не оставляйте исключения стороннего SDK необработанными на внешней границе. Bootstrap 0.6.5 включает имя и текст необработанного exception в failed-event и печатает traceback в stderr, поэтому production-entrypoint должен перехватывать ожидаемые client/SDK errors, переводить их в заранее заданный safe code/message и завершать account lifecycle без `str(error)`, `repr(error)` или raw payload. Неизвестное исключение классифицируйте общим безопасным кодом и воспроизводите отдельно без production secrets; redactor здесь только последняя защита, а не безопасная exception boundary.
+Не оставляйте исключения стороннего SDK необработанными на внешней границе. Bootstrap 0.6.8 включает имя и текст необработанного exception в failed-event и печатает traceback в stderr, поэтому production-entrypoint должен перехватывать ожидаемые client/SDK errors, переводить их в заранее заданный safe code/message и завершать account lifecycle без `str(error)`, `repr(error)` или raw payload. Неизвестное исключение классифицируйте общим безопасным кодом и воспроизводите отдельно без production secrets; redactor здесь только последняя защита, а не безопасная exception boundary.
 
 ## 6. Рекомендуемый entrypoint
 
@@ -787,7 +848,7 @@ context.check_cancelled()
 
 Метод поднимает `CancelledError`, который должен дойти до bootstrap. Не перехватывайте его общим `except BaseException`. Если нужна очистка, используйте `try/finally`, после чего снова вызовите `check_cancelled()` или пробросьте исключение.
 
-Через 10 секунд после мягкого сигнала живой процесс принудительно завершается. На Windows текущая реализация использует `process.terminate()`, а не доставку Python-сигнала в bootstrap, поэтому cooperative cancellation и cleanup там не гарантированы даже при `safe_stop: true`. До исправления Windows signal path финансовый action обязан рассчитывать на journal/reconciliation после принудительного прерывания. Поэтому на всех платформах:
+Через 10 секунд после мягкого сигнала живой процесс принудительно завершается. На Windows мягкая остановка использует `process.terminate()`, а force stop — best-effort `taskkill /PID ... /T /F`; Python-сигнал в bootstrap не доставляется, поэтому cooperative cancellation и cleanup там не гарантированы даже при `safe_stop: true`. Windows Job Object в 0.6.8 не реализован, и отделившийся descendant теоретически может пережить cleanup. Финансовый action обязан рассчитывать на journal/reconciliation после принудительного прерывания. Поэтому на всех платформах:
 
 - проверяйте отмену между аккаунтами, retry и внешними операциями;
 - ставьте таймауты на HTTP/RPC;
@@ -797,7 +858,7 @@ context.check_cancelled()
 
 Принудительно остановленный write-run не считается безопасно отменённым: он получает `needs_attention`, а его chain/account либо external-service lease остаётся бессрочно. Оператор обязан проверить внешнее состояние, открыть журнал и ввести точное `RECONCILED`. Только после этого Hub меняет run на `reconciled` и снимает leases. Плагин не может эмитить `reconciled`. Штатное завершение `cancelled`/exit 130 снимает leases автоматически.
 
-Не смешивайте это с известной ошибкой. `failed` означает определённый локальный исход до неоднозначного write и не должен иметь safety lease; такой run можно повторить. После чтения журнала оператор закрывает текущее уведомление действием review: Hub меняет только run status на `reviewed`, сохраняет error/events/results/account states и не выдаёт это за успешный outcome. Review отклоняется, если у failed run остался lease. `needs_attention` review-механикой не закрывается и блокирует повтор конфликтующего account/scope до внешней сверки.
+Не смешивайте это с известной ошибкой. Review доступен общему `failed` или любому terminal run с известным account-state `partial`, `failed`, `blocked` либо неисторическим `unknown`, если нет `needs_attention` и safety lease. После чтения журнала оператор закрывает текущее уведомление: Hub меняет только run status на `reviewed`, сохраняет error/events/results/account states и не выдаёт это за успешный outcome. Если хотя бы один account-state равен `needs_attention`, весь mixed run требует внешней сверки; review отклоняется и повтор конфликтующего account/scope остаётся заблокированным до `RECONCILED`.
 
 `state_model` — честное описание стратегии:
 
@@ -805,7 +866,7 @@ context.check_cancelled()
 - `resumable`: существует durable checkpoint/journal и определён recovery path;
 - `externally_reconciled`: перед продолжением истина восстанавливается из chain/API.
 
-В 0.6.5 Hub не реализует plugin state storage, resume callback или recovery action автоматически. Более того, новый reconcile run не получает через `HubContext` logs, results, summary, options, scratch или checkpoint предыдущего run, и Hub не запускает reconcile action сам. Сверка обязана читать внешнюю истину по текущему account identity и устойчивому business key/public operation ID; если без прошлого transient context доказательство невозможно, верните `unknown`. Для настоящего `resumable` софта нужен стабильный, не привязанный к версии data directory либо внешнее хранилище. Не используйте scratch для межзапускового состояния и не прячьте SQLite внутрь immutable package без плана миграции/rollback. `stateless` не доказывает идемпотентность повторного write, а `resumable` не создаёт storage.
+В 0.6.8 Hub не реализует plugin state storage, resume callback или recovery action автоматически. Более того, новый reconcile run не получает через `HubContext` logs, results, summary, options, scratch или checkpoint предыдущего run, и Hub не запускает reconcile action сам. Сверка обязана читать внешнюю истину по текущему account identity и устойчивому business key/public operation ID; если без прошлого transient context доказательство невозможно, верните `unknown`. Для настоящего `resumable` софта нужен стабильный, не привязанный к версии data directory либо внешнее хранилище. Не используйте scratch для межзапускового состояния и не прячьте SQLite внутрь immutable package без плана миграции/rollback. `stateless` не доказывает идемпотентность повторного write, а `resumable` не создаёт storage.
 
 ## 8. Секреты и профили
 
@@ -832,9 +893,9 @@ Email password, Twitter и AdsPower profile ID входят в зашифров�
 
 Центральный plaintext export — операторский flow с повторным паролем и точной фразой `EXPORT PLAINTEXT SECRETS`; account export может включать `adspower_profile`, но никогда не включает глобальные Capsolver/AdsPower API keys. Плагин не должен дублировать этот export собственным CSV или выносить выданные secrets в results.
 
-### 8.1. Реферальная сеть 0.6.5
+### 8.1. Реферальная сеть 0.6.8
 
-Реферальная сеть 0.6.5 — host-owned зашифрованная **топология** `child → direct parent`. Пользователь назначает только связи между локальными аккаунтами. Он не вводит referral/invite code, а Hub не persist-ит и не возвращает проектные коды через Vault, входной run context, options, events, results, summary, logs, export или файлы. Единственный временный host-channel — описанный ниже неперсистируемый `protect_secret` control-frame.
+Реферальная сеть, доступная с 0.6.5 и графически переработанная в 0.6.6, — host-owned зашифрованная **топология** `child → direct parent`. В 0.6.7 редактор получил отдельную камеру: pan, zoom вокруг курсора, fit-all, переход к корням и мини-карту. В 0.6.8 рабочая область стала использовать доступную высоту окна и перестала обрезать canvas снизу. Это только навигация по текущему draft; viewport и координаты не сохраняются. Пользователь назначает только связи между локальными аккаунтами. Он не вводит referral/invite code, а Hub не persist-ит и не возвращает проектные коды через Vault, входной run context, options, events, results, summary, logs, export или файлы. Единственный временный host-channel — описанный ниже неперсистируемый `protect_secret` control-frame.
 
 UI сохраняет полный снимок через CAS endpoint `POST /api/accounts/referral-topology`:
 
@@ -916,7 +977,7 @@ Unlimited approval, permit, arbitrary message и blind signing запрещен�
 3. Hub сначала обновляет `pip` внутри `.venv` из закреплённого offline wheel приложения с `--no-index`, затем выполняет `python -m pip install --disable-pip-version-check -r <file>` с timeout 900 секунд.
 4. После успешного pip Hub атомарно записывает `.venv/.soft-hub-ready.json` с SHA-256 requirements и ID текущего managed runtime; только Python + валидный marker дают health `ready`.
 
-Pip stdout/stderr захватываются subprocess-вызовом, но Hub 0.6.5 не сохраняет их в журнал и при ошибке возвращает общее сообщение. Воспроизводите неудачный prepare в проверенном локальном окружении без secrets; не рассчитывайте на подробный install log в UI.
+Pip stdout/stderr захватываются subprocess-вызовом, но Hub 0.6.8 не сохраняет их в журнал и при ошибке возвращает общее сообщение. Воспроизводите неудачный prepare в проверенном локальном окружении без secrets; не рассчитывайте на подробный install log в UI.
 
 Каждая версия имеет собственную `.venv`; новая версия не наследует окружение старой. Failed pip не создаёт marker и не делает окружение готовым. Rollback вернёт health предыдущей версии только при совпадении marker с её requirements и managed runtime. Перемещение `.app` либо обновление встроенного Python также инвалидирует старое окружение: нажмите «Подготовить» ещё раз.
 
@@ -973,7 +1034,7 @@ plugin/client.py     HTTP/RPC с timeout и proxy
 3. Удалите собственное дублирующее хранилище общих секретов.
 4. Перенесите безопасные настройки из `parameters.py` в action options; опасные адреса/chain IDs оставьте constants и валидируйте fail-closed.
 5. Замените console/file logger на небольшой adapter, вызывающий `context.log/progress/result`.
-6. Преобразуйте CSV/таблицы в один `context.result()` на профиль плюс summary.
+6. Преобразуйте CSV/таблицы в один `context.result()` на профиль плюс summary; для табличного Parsing-результата объявите `output` с `mode: "account_table"` и единый `primary_kind`.
 7. Добавьте отмену и таймауты.
 8. Разделите read и write actions с правильным risk.
 9. Для write-действий добавьте idempotency key, preflight и внешнюю reconciliation.
@@ -1005,7 +1066,7 @@ python3 scripts/build_plugin.py my-soft dist/my-soft-1.0.0.softhub.zip
 - отмену до первого side effect и во время retry;
 - отсутствие secrets в событиях и exception messages;
 - повторный запуск после частичного внешнего успеха.
-- review известного failed run без lease и отдельный `RECONCILED` flow для `needs_attention` с lease;
+- review известной terminal/account-level проблемы без lease и отдельный `RECONCILED` flow для любого `needs_attention`/lease;
 - AdsPower duplicate profile IDs и live preflight, если action использует браузер;
 - HTTP `423` без создания run для одиночного старта и batch при locked Vault;
 - strict schema `account_concurrency`: mandatory для `one_or_more`, forbidden для `none`, default/clamp и потолок `20` для HTTP либо `5` для browser;
@@ -1054,8 +1115,9 @@ Builder не проверяет, что entrypoint реально импорти
 
 - [ ] Уникальный постоянный `id`, новая SemVer-версия.
 - [ ] Есть точный `contract_version: SH-SOFTWARE-0.6/3`; пакет не маскируется под legacy.
-- [ ] `compatibility.hub` не ниже `>=0.6.5`; перечислены только реально протестированные OS.
+- [ ] `compatibility.hub` не ниже `>=0.6.5`, а при наличии `action.output` — не ниже `>=0.6.8`; перечислены только реально протестированные OS.
 - [ ] Есть полный `presentation`; оба локальных image asset входят в checksums и проходят лимиты формата/размера.
+- [ ] Названия, описания, option-copy, messages и безопасные ошибки вычитаны как единый живой русский интерфейс: без внутренних терминов, англоязычных заглушек и неподтверждённых обещаний.
 - [ ] Entry point имеет вид `package.module:function`.
 - [ ] Каждое действие имеет честные `risk` и `account_mode`.
 - [ ] Mainnet action имеет конкретную confirmation phrase.
@@ -1089,6 +1151,9 @@ Builder не проверяет, что entrypoint реально импорти
 - [ ] `map_accounts()` либо эквивалент строго соблюдает `context.account_concurrency`; shared mutable state синхронизирован, workers имеют timeout/cancellation/cleanup.
 - [ ] Внешняя exception boundary выдаёт только allowlisted safe codes/messages, без raw exception/traceback.
 - [ ] Для каждого начатого профиля с предметным итогом создаётся ровно один структурированный result со стабильным kind/schema.
+- [ ] Parsing-action имеет `risk: read`, `account_mode: one_or_more` и не создаёт сессию, POST, claim, browser submit, подпись или транзакцию.
+- [ ] `output` с `mode: account_table` имеет 1..12 прямых scalar-колонок, не более четырёх numeric aggregates и ровно один `primary_kind` result на каждый начатый аккаунт.
+- [ ] В объявленных табличных fields нет secrets, raw response, DOM/HAR, вложенных объектов/массивов и plugin-owned HTML.
 - [ ] Для каждого профиля есть `running` и ровно один terminal `account_state` на всех ветках выхода.
 - [ ] Progress следует weighted work plan, имеет минимум три meaningful промежуточных milestone и не симулируется таймером.
 - [ ] Entrypoint не возвращается до завершения/join всех worker threads и tasks.
@@ -1097,7 +1162,7 @@ Builder не проверяет, что entrypoint реально импорти
 - [ ] EVM-путь локально подписывает и fail-closed проверяет chain/to/calldata/value/spender/amount/nonce/gas; raw signed transaction не покидает память.
 - [ ] AdsPower action отклоняет duplicate profile IDs до workers и делает bounded live preflight до browser/write side effect.
 - [ ] Capsolver/AdsPower API keys берутся только из `context.settings`, имеют минимум 4 символа и не передаются через options/account bundle.
-- [ ] `failed → reviewed` сохраняет историю и допускает rerun без lease; `needs_attention → reconciled` требует внешнюю проверку и `RECONCILED`.
+- [ ] Известная terminal/account-level проблема без lease → `reviewed` сохраняет историю; любой `needs_attention`/lease → `reconciled` только после внешней проверки и `RECONCILED`.
 
 ### Пакет
 

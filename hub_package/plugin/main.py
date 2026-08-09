@@ -12,6 +12,13 @@ from checkpoint_bot.actions import WalletActionRunner
 from checkpoint_bot.client import CheckpointClient
 from checkpoint_bot.config import AppConfig
 from checkpoint_bot.offer_pool import OfferPool
+from checkpoint_bot.referral import (
+    address_from_account,
+    fetch_referral_status,
+    make_session,
+    register_portfolio_address,
+    submit_referral,
+)
 from soft_hub.sdk import CancelledError, HubAccount, HubContext
 
 
@@ -21,6 +28,7 @@ MIN_ETH = Decimal("0.00005")
 ACTION_MODES = {
     "inspect": "parse",
     "farm": "daily",
+    "register": "register",
 }
 RPC_PRIMARY = "https://arbitrum-sepolia-rpc.publicnode.com"
 RPC_FALLBACKS = [
@@ -35,6 +43,9 @@ def run(context: HubContext) -> dict[str, Any]:
     mode = ACTION_MODES.get(context.action_id)
     if mode is None:
         raise ValueError(f"unsupported_action:{context.action_id}")
+
+    if mode == "register":
+        return _run_register(context)
 
     cfg = _build_config(context)
     offer_pool = OfferPool()
@@ -116,6 +127,355 @@ def run(context: HubContext) -> dict[str, Any]:
         "mode": mode,
         "account_concurrency": workers,
     }
+
+
+def _run_register(context: HubContext) -> dict[str, Any]:
+    """Register wallets on Checkpoint and attach Soft Hub referral topology."""
+    cfg = _build_config(context)
+    lock = threading.Lock()
+    counters: dict[str, int] = {
+        "total": len(context.accounts),
+        "succeeded": 0,
+        "partial": 0,
+        "failed": 0,
+        "skipped": 0,
+        "blocked": 0,
+        "needs_attention": 0,
+        "cancelled": 0,
+        "transactions": 0,
+        "linked": 0,
+        "roots": 0,
+        "already_linked": 0,
+    }
+    workers = max(
+        1,
+        min(int(getattr(context, "account_concurrency", 1) or 1), len(context.accounts) or 1),
+    )
+    levels = _referral_levels(context)
+    context.log(
+        "Старт регистрации Checkpoint",
+        data={
+            "mode": "register",
+            "accounts": len(context.accounts),
+            "levels": len(levels),
+            "account_concurrency": workers,
+            "referral_mode": getattr(context, "referral_mode", "none"),
+        },
+    )
+
+    def worker(hub_account: HubAccount) -> str:
+        try:
+            status, meta = _register_account(context, hub_account, cfg=cfg)
+        except CancelledError:
+            with lock:
+                counters["cancelled"] = counters.get("cancelled", 0) + 1
+            raise
+        except Exception:
+            with lock:
+                counters["failed"] = counters.get("failed", 0) + 1
+            try:
+                context.account_state(
+                    hub_account.id,
+                    status="failed",
+                    stage="automation_failed",
+                    message="Ошибка регистрации",
+                )
+            except Exception:
+                pass
+            return "failed"
+        with lock:
+            counters[status] = counters.get(status, 0) + 1
+            if meta.get("linked"):
+                counters["linked"] = counters.get("linked", 0) + 1
+            if meta.get("is_root"):
+                counters["roots"] = counters.get("roots", 0) + 1
+            if meta.get("already_linked"):
+                counters["already_linked"] = counters.get("already_linked", 0) + 1
+        return status
+
+    for level_index, level in enumerate(levels):
+        context.check_cancelled()
+        context.log(
+            f"Уровень реферальной цепи {level_index}",
+            data={"accounts": len(level), "level": level_index},
+        )
+        if hasattr(context, "map_accounts"):
+            context.map_accounts(worker, accounts=level)
+        else:
+            for account in level:
+                context.check_cancelled()
+                worker(account)
+
+    return {
+        "total": counters["total"],
+        "succeeded": counters["succeeded"],
+        "partial": counters["partial"],
+        "failed": counters["failed"],
+        "skipped": counters["skipped"],
+        "blocked": counters["blocked"],
+        "needs_attention": counters["needs_attention"],
+        "cancelled": counters["cancelled"],
+        "transactions": counters["transactions"],
+        "linked": counters.get("linked", 0),
+        "roots": counters.get("roots", 0),
+        "already_linked": counters.get("already_linked", 0),
+        "levels": len(levels),
+        "chain_id": CHAIN_ID,
+        "mode": "register",
+        "account_concurrency": workers,
+    }
+
+
+def _referral_levels(context: HubContext) -> tuple[tuple[HubAccount, ...], ...]:
+    levels = getattr(context, "referral_levels", None)
+    if levels is not None:
+        try:
+            materialised = tuple(tuple(level) for level in levels)
+            if materialised:
+                return materialised
+        except Exception:
+            pass
+    return (tuple(context.accounts),)
+
+
+def _register_account(
+    context: HubContext,
+    hub_account: HubAccount,
+    *,
+    cfg: AppConfig,
+) -> tuple[str, dict[str, bool]]:
+    context.check_cancelled()
+    context.account_state(
+        hub_account.id,
+        status="running",
+        stage="preflight",
+        progress=0.05,
+        message="Проверяем ключ и proxy",
+    )
+
+    meta = {"linked": False, "is_root": False, "already_linked": False}
+    cancelled: CancelledError | None = None
+    terminal_status = "failed"
+    terminal_stage = "automation_failed"
+    terminal_message = "Регистрация завершилась ошибкой"
+    write_may_have_happened = False
+
+    try:
+        account = _account_config(hub_account)
+        child_address = address_from_account(account)
+        if hub_account.evm_address and child_address.lower() != hub_account.evm_address.lower():
+            raise RuntimeError("bad_key: private key ≠ Hub address")
+
+        session = make_session(account.proxy)
+
+        context.account_state(
+            hub_account.id,
+            status="running",
+            stage="portfolio",
+            progress=0.25,
+            message="Индексируем кошелёк в portfolio",
+        )
+        context.check_cancelled()
+        write_may_have_happened = True
+        register_portfolio_address(session, cfg, child_address)
+
+        parent = _parent_for(context, hub_account)
+        if parent is None:
+            meta["is_root"] = True
+            terminal_status = "succeeded"
+            terminal_stage = "completed"
+            terminal_message = "Корень: portfolio готов, parent не нужен"
+            context.result(
+                f"{hub_account.label}: root registered",
+                kind="register_result",
+                status="succeeded",
+                account_id=hub_account.id,
+                data={
+                    "is_root": True,
+                    "has_parent": False,
+                    "referral_status": "root",
+                    "already_linked": False,
+                    "portfolio": True,
+                },
+            )
+            context.log(
+                "Root-аккаунт зарегистрирован (без реферала)",
+                account_id=hub_account.id,
+                data={"portfolio": True, "is_root": True},
+            )
+        else:
+            project_code = (getattr(parent, "evm_address", None) or "").strip()
+            if not project_code or not project_code.startswith("0x") or len(project_code) < 42:
+                raise RuntimeError("blocked: у parent нет EVM-адреса")
+
+            # Project code for Checkpoint = parent wallet address.
+            # protect_secret BEFORE any log/result that might echo the value.
+            if hasattr(context, "protect_secret"):
+                project_code = context.protect_secret(project_code)
+
+            context.account_state(
+                hub_account.id,
+                status="running",
+                stage="referral_check",
+                progress=0.45,
+                message="Проверяем текущий referral status",
+            )
+            context.check_cancelled()
+            existing = fetch_referral_status(session, cfg, child_address)
+            existing_by = str(existing.get("referredBy") or "").strip().lower()
+            existing_status = str(existing.get("status") or "").strip().lower() or None
+
+            if existing_by:
+                if existing_by == project_code.lower():
+                    meta["already_linked"] = True
+                    meta["linked"] = True
+                    terminal_status = "succeeded"
+                    terminal_stage = "completed"
+                    terminal_message = "Уже привязан к parent из топологии Hub"
+                    context.result(
+                        f"{hub_account.label}: already linked",
+                        kind="register_result",
+                        status="succeeded",
+                        account_id=hub_account.id,
+                        data={
+                            "is_root": False,
+                            "has_parent": True,
+                            "referral_status": existing_status or "pending",
+                            "already_linked": True,
+                            "portfolio": True,
+                        },
+                    )
+                    context.log(
+                        "Реферал уже совпадает с parent из Hub",
+                        account_id=hub_account.id,
+                        data={"already_linked": True, "status": existing_status},
+                    )
+                else:
+                    terminal_status = "blocked"
+                    terminal_stage = "preflight_blocked"
+                    terminal_message = "У аккаунта уже другой referrer — сменить нельзя"
+                    context.result(
+                        f"{hub_account.label}: foreign referrer",
+                        kind="register_result",
+                        status="blocked",
+                        account_id=hub_account.id,
+                        data={
+                            "is_root": False,
+                            "has_parent": True,
+                            "referral_status": existing_status or "foreign",
+                            "already_linked": True,
+                            "mismatch": True,
+                            "portfolio": True,
+                        },
+                    )
+                    context.log(
+                        "Чужой referrer уже назначен",
+                        level="warning",
+                        account_id=hub_account.id,
+                        data={"mismatch": True},
+                    )
+            else:
+                context.account_state(
+                    hub_account.id,
+                    status="running",
+                    stage="referral",
+                    progress=0.70,
+                    message="Сажаем на реферальный код parent",
+                )
+                context.check_cancelled()
+                write_may_have_happened = True
+                submit = submit_referral(
+                    session,
+                    cfg,
+                    referee=child_address,
+                    referrer=project_code,
+                )
+                ref_status = str(submit.get("status") or "pending")
+                created = bool(submit.get("created"))
+                meta["linked"] = True
+                terminal_status = "succeeded"
+                terminal_stage = "completed"
+                terminal_message = "Привязан к parent из топологии Hub"
+                write_may_have_happened = False
+                context.result(
+                    f"{hub_account.label}: referral linked",
+                    kind="register_result",
+                    status="succeeded",
+                    account_id=hub_account.id,
+                    data={
+                        "is_root": False,
+                        "has_parent": True,
+                        "referral_status": ref_status,
+                        "created": created,
+                        "already_linked": False,
+                        "portfolio": True,
+                    },
+                )
+                context.log(
+                    "Реферал создан",
+                    account_id=hub_account.id,
+                    data={"created": created, "status": ref_status},
+                )
+
+            # Best-effort clear of local handle (project code must not linger).
+            project_code = ""
+
+    except CancelledError as error:
+        cancelled = error
+        if write_may_have_happened:
+            terminal_status = "needs_attention"
+            terminal_stage = "needs_reconciliation"
+            terminal_message = "Остановка после внешнего write — сверьте Checkpoint"
+        else:
+            terminal_status = "cancelled"
+            terminal_stage = "cancelled"
+            terminal_message = "Остановлено до external write"
+    except Exception as exc:
+        code = _classify_error(exc)
+        if write_may_have_happened:
+            terminal_status = "needs_attention"
+            terminal_stage = "needs_reconciliation"
+            terminal_message = "Возможный external write — сверьте Checkpoint"
+        elif code in {"missing_secret", "bad_key", "blocked"}:
+            terminal_status = "blocked"
+            terminal_stage = "preflight_blocked"
+            terminal_message = _safe_error(exc)
+        else:
+            terminal_status = "failed"
+            terminal_stage = "automation_failed"
+            terminal_message = _safe_error(exc)
+        context.log(
+            "Регистрация аккаунта завершилась ошибкой",
+            level="error",
+            account_id=hub_account.id,
+            data={"error_code": code},
+        )
+
+    context.account_state(
+        hub_account.id,
+        status=terminal_status,
+        stage=terminal_stage,
+        progress=1.0 if terminal_status in {"succeeded", "partial"} else None,
+        message=terminal_message,
+    )
+
+    if cancelled is not None:
+        raise cancelled
+    return terminal_status, meta
+
+
+def _parent_for(context: HubContext, child: HubAccount) -> HubAccount | None:
+    referrals = getattr(context, "referrals", None)
+    if referrals is None:
+        return None
+    parent_for = getattr(referrals, "parent_for", None)
+    if not callable(parent_for):
+        return None
+    try:
+        return parent_for(child.id)
+    except KeyError:
+        # Account outside referral plan snapshot — treat as root/no parent.
+        return None
 
 
 def _run_account(
@@ -487,6 +847,8 @@ def _classify_error(exc: Exception) -> str:
         return "wrong_chain"
     if "мало eth" in text or "low_gas" in text or "insufficient funds" in text:
         return "low_gas"
+    if text.startswith("blocked:") or "blocked" in text:
+        return "blocked"
     if "cancelled" in text or "отмен" in text:
         return "cancelled"
     return "runtime_error"
