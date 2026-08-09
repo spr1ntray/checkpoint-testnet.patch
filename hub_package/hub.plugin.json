@@ -3,12 +3,12 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.5.0",
-  "description": "Checkpoint XP на Arbitrum Sepolia: работа (auto-register по реф-цепи + farm) и парсинг.",
+  "version": "1.5.1",
+  "description": "XP farm на Arbitrum Sepolia.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Два режима: Работа (новые аккаунты сами садятся на рефералку по топологии Hub, затем farm fills) и Парсинг XP/балансов. Manual invite code не нужен.",
+    "description": "Работа и парсинг Checkpoint XP.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
@@ -55,7 +55,7 @@
     {
       "id": "farm",
       "name": "Работа",
-      "description": "Новые аккаунты автоматически регистрирует и сажает на parent по топологии Soft Hub (parent-first), затем mint test USDC и market fills (до 5/день). Если аккаунт уже на чужом referrer — пишет в лог и фармит дальше.",
+      "description": "Регистрация по реф-цепи и farm fills.",
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
@@ -88,7 +88,7 @@
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей одного уровня обрабатывать одновременно. Между уровнями реф-цепи — barrier.",
+            "description": "Сколько профилей обрабатывать сразу.",
             "default": 3,
             "minimum": 1,
             "maximum": 10,
@@ -102,7 +102,7 @@
           "trades": {
             "type": "integer",
             "title": "Количество fills",
-            "description": "Сколько market fills на аккаунт (макс 5/день по XP-правилам).",
+            "description": "Fills на аккаунт (макс 5/день).",
             "minimum": 1,
             "maximum": 5,
             "default": 5,
@@ -115,7 +115,7 @@
           "max_usdc_per_fill": {
             "type": "number",
             "title": "Макс. USDC на fill",
-            "description": "Не брать offers дороже этого notional.",
+            "description": "Лимит notional на fill.",
             "minimum": 0.01,
             "maximum": 5,
             "default": 2,
@@ -128,7 +128,7 @@
           "delay_seconds": {
             "type": "number",
             "title": "Пауза между действиями",
-            "description": "Задержка между mint/approve/fill на одном аккаунте.",
+            "description": "Пауза между шагами.",
             "minimum": 0,
             "maximum": 60,
             "default": 8,
@@ -146,7 +146,7 @@
     {
       "id": "inspect",
       "name": "Парсинг",
-      "description": "Читает ETH, test USDC и Checkpoint XP; показывает таблицу по аккаунтам.",
+      "description": "ETH, USDC и XP по аккаунтам.",
       "risk": "read",
       "account_mode": "one_or_more",
       "permissions": {
@@ -214,7 +214,7 @@
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей обрабатывать одновременно внутри одного запуска.",
+            "description": "Сколько профилей обрабатывать сразу.",
             "default": 5,
             "minimum": 1,
             "maximum": 20,
