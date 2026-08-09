@@ -343,7 +343,10 @@ class WalletActionRunner:
                         "action": "fill",
                         "status": "skipped",
                         "tx_hash": None,
-                        "details": {"reason": "no suitable free offers"},
+                        "details": {
+                            "reason": "no_offers",
+                            "hint": "Нет подходящих offers в диапазоне USDC",
+                        },
                     }
                 )
                 break

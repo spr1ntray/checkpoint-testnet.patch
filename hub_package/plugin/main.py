@@ -187,7 +187,7 @@ def _run_account(
                         f"Мало ETH: {details.get('eth')} "
                         f"(нужно ≥ {details.get('need')})"
                     )
-                elif reason == "no suitable free offers" or "offer" in str(details.get("reason", "")).lower():
+                elif reason in {"no_offers", "no suitable free offers"}:
                     event_stats["no_offers"] = True
                     last_skip_reason = "Нет подходящих offers в заданном диапазоне USDC"
                 elif details.get("reason"):
