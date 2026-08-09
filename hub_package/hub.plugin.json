@@ -3,7 +3,7 @@
   "contract_version": "SH-SOFTWARE-0.6/3",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "XP farm на Arbitrum Sepolia.",
   "author": "sprintray",
   "presentation": {

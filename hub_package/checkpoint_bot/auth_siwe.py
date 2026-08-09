@@ -103,11 +103,13 @@ def siwe_login(client: CheckpointClient, cfg: AppConfig, capsolver_api_key: str 
     }
     verify = client.http_post(f"{base}/verify", json=body, headers=headers)
     if verify.status_code >= 400:
-        detail = verify.text[:400]
-        raise RuntimeError(f"SIWE verify {verify.status_code}: {detail}")
-    data = verify.json()
-    jwt = data.get("jwt") or data.get("token") or ""
+        # Never echo response body (may include tokens / session material).
+        raise RuntimeError(f"SIWE verify HTTP {verify.status_code}")
+    data = verify.json() if verify.content else {}
+    jwt = ""
+    if isinstance(data, dict):
+        jwt = data.get("jwt") or data.get("token") or ""
     if not jwt:
-        raise RuntimeError(f"SIWE verify ok but no jwt: {str(data)[:200]}")
+        raise RuntimeError("SIWE verify ok but no jwt in response")
     client.jwt = jwt
     return jwt

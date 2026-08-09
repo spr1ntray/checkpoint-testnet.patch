@@ -39,6 +39,9 @@ class CheckpointClient:
         self.label = account.label
         self.proxy = account.proxy
 
+    def __repr__(self) -> str:
+        return f"CheckpointClient(label={self.label!r}, address={self.address})"
+
         self.http = requests.Session()
         self.http.headers.update(
             {

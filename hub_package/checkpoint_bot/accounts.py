@@ -14,6 +14,13 @@ class AccountConfig:
     private_key: str
     proxy: str | None = None
 
+    def __repr__(self) -> str:
+        # Never dump private_key / proxy credentials into logs or tracebacks.
+        return f"AccountConfig(label={self.label!r}, private_key=***, proxy={'set' if self.proxy else None})"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
 
 def normalize_proxy(proxy: str | None) -> str | None:
     if not proxy:

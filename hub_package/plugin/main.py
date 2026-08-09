@@ -19,6 +19,7 @@ from checkpoint_bot.referral import (
     register_portfolio_address,
     submit_referral,
 )
+from checkpoint_bot.utils import scrub_secrets
 from soft_hub.sdk import CancelledError, HubAccount, HubContext
 
 
@@ -220,7 +221,7 @@ def _ensure_registered(
             "Portfolio register soft-fail — продолжаем",
             level="warning",
             account_id=hub_account.id,
-            data={"error": _safe_error(exc)[:160]},
+            data={"error": _safe_error(exc)[:160]},  # scrubbed
         )
 
     parent = _parent_for(context, hub_account)
@@ -261,7 +262,7 @@ def _ensure_registered(
             "Не удалось прочитать referral status — пробуем создать",
             level="warning",
             account_id=hub_account.id,
-            data={"error": _safe_error(exc)[:160]},
+            data={"error": _safe_error(exc)[:160]},  # scrubbed
         )
         existing = {}
 
@@ -308,7 +309,7 @@ def _ensure_registered(
             "Реферал не создался — фарм продолжаем",
             level="warning",
             account_id=hub_account.id,
-            data={"error": _safe_error(exc)[:160]},
+            data={"error": _safe_error(exc)[:160]},  # scrubbed
         )
     finally:
         project_code = ""
@@ -350,7 +351,7 @@ def _run_account(
     }
 
     try:
-        account = _account_config(hub_account)
+        account = _account_config(hub_account, context)
         child_address = address_from_account(account)
         if hub_account.evm_address and child_address.lower() != hub_account.evm_address.lower():
             raise RuntimeError("bad_key: private key ≠ Hub address")
@@ -660,12 +661,28 @@ def _build_config(context: HubContext) -> AppConfig:
     )
 
 
-def _account_config(account: HubAccount) -> AccountConfig:
+def _account_config(account: HubAccount, context: HubContext | None = None) -> AccountConfig:
     private_key = normalize_private_key(account.secret("evm_private_key"))
     try:
         proxy = normalize_proxy(account.secret("proxy"))
     except KeyError:
         proxy = None
+    # Defense-in-depth: register Vault secrets with host Redactor so any accidental
+    # echo (exception text, proxy URL variants) is scrubbed from events/logs.
+    if context is not None and hasattr(context, "protect_secret"):
+        try:
+            if private_key and 4 <= len(private_key) <= 4096:
+                context.protect_secret(private_key)
+            if private_key.startswith("0x") and 4 <= len(private_key[2:]) <= 4096:
+                context.protect_secret(private_key[2:])
+            if proxy and 4 <= len(proxy) <= 4096:
+                context.protect_secret(proxy)
+            if proxy:
+                bare = proxy.replace("http://", "").replace("https://", "")
+                if bare != proxy and 4 <= len(bare) <= 4096:
+                    context.protect_secret(bare)
+        except Exception:
+            pass
     return AccountConfig(label=account.label, private_key=private_key, proxy=proxy)
 
 
@@ -681,7 +698,8 @@ def _preflight(client: CheckpointClient, account: HubAccount) -> None:
 def _public_data(value: Any) -> Any:
     forbidden = (
         "private", "secret", "signature", "authorization", "jwt", "captcha",
-        "password", "proxy", "token", "api_key", "apikey",
+        "password", "proxy", "token", "api_key", "apikey", "cookie", "set-cookie",
+        "private_key", "referrer_code", "referral_code",
     )
     if isinstance(value, dict):
         return {
@@ -691,13 +709,16 @@ def _public_data(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_public_data(item) for item in value[:40]]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value[:500] if isinstance(value, str) and len(value) > 500 else value
-    return str(value)[:300]
+    if isinstance(value, str):
+        clean = scrub_secrets(value)
+        return clean[:500] if len(clean) > 500 else clean
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return scrub_secrets(str(value)[:300])
 
 
 def _safe_error(exc: Exception) -> str:
-    text = str(exc).replace("\n", " ").strip()
+    text = scrub_secrets(str(exc).replace("\n", " ").strip())
     return (text[:280] if len(text) > 280 else text) or type(exc).__name__
 
 

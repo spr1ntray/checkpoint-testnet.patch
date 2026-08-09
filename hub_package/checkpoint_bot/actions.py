@@ -13,14 +13,20 @@ from .market_api import fetch_offers, pick_fill_targets
 from .offer_pool import OfferPool
 from .rewards import fetch_rewards
 from .usdc import approve_market, ensure_usdc
-from .utils import sleep_range
+from .utils import scrub_secrets, sleep_range
 
 
 Emit = Callable[[dict[str, Any]], None]
 
 
+def _safe_exc(exc: Exception, limit: int = 240) -> str:
+    """Exception text safe for Hub log/result (no proxy/key/jwt fragments)."""
+    text = scrub_secrets(str(exc).replace("\n", " ").strip())
+    return (text[:limit] if len(text) > limit else text) or type(exc).__name__
+
+
 def _friendly_fill_error(exc: Exception) -> str:
-    text = str(exc)
+    text = scrub_secrets(str(exc))
     if "0xe28caf6a" in text or "CannotFillOffer" in text:
         return "CannotFillOffer — offer уже занят/заполнен (гонка)"
     if "403" in text and "rpc" in text.lower():
@@ -94,7 +100,7 @@ class WalletActionRunner:
                     "action": "xp_baseline",
                     "status": "failed",
                     "tx_hash": None,
-                    "details": {"error": str(exc)[:300]},
+                    "details": {"error": _safe_exc(exc)},
                 }
             )
 
@@ -139,7 +145,7 @@ class WalletActionRunner:
                     "action": "xp_report",
                     "status": "failed",
                     "tx_hash": None,
-                    "details": {"error": str(exc)[:300]},
+                    "details": {"error": _safe_exc(exc)},
                 }
             )
 
@@ -171,7 +177,7 @@ class WalletActionRunner:
                 "sell_xp": 0.0,
                 "deposit_xp": 0.0,
                 "rank": None,
-                "error": str(exc)[:200],
+                "error": _safe_exc(exc, 200),
             }
             status = "failed"
         self.emit(
@@ -215,7 +221,7 @@ class WalletActionRunner:
                     "action": "siwe",
                     "status": "failed",
                     "tx_hash": None,
-                    "details": {"error": str(exc)[:400]},
+                    "details": {"error": _safe_exc(exc, 400)},
                 }
             )
 
@@ -268,7 +274,7 @@ class WalletActionRunner:
                         "action": "deposit",
                         "status": "skipped",
                         "tx_hash": None,
-                        "details": {"points_id": pid, "error": str(exc)[:300]},
+                        "details": {"points_id": pid, "error": _safe_exc(exc)},
                     }
                 )
             sleep_range(self.cfg.delay_min, self.cfg.delay_max)
@@ -301,7 +307,7 @@ class WalletActionRunner:
                     "action": "mint_usdc",
                     "status": "failed",
                     "tx_hash": None,
-                    "details": {"error": str(exc)[:300]},
+                    "details": {"error": _safe_exc(exc)},
                 }
             )
             return
@@ -323,7 +329,7 @@ class WalletActionRunner:
                         "action": "fetch_offers",
                         "status": "failed",
                         "tx_hash": None,
-                        "details": {"error": str(exc)[:300]},
+                        "details": {"error": _safe_exc(exc)},
                     }
                 )
                 break
@@ -467,7 +473,7 @@ class WalletActionRunner:
                         "action": "create_offer",
                         "status": "failed",
                         "tx_hash": None,
-                        "details": {"error": str(exc)[:300]},
+                        "details": {"error": _safe_exc(exc)},
                     }
                 )
             sleep_range(cfg.delay_min, cfg.delay_max)
