@@ -19,6 +19,12 @@ from checkpoint_bot.referral import (
     register_portfolio_address,
     submit_referral,
 )
+from checkpoint_bot.timing import (
+    account_start_delay,
+    between_levels_delay,
+    parse_account_gap,
+    pre_http_delay,
+)
 from checkpoint_bot.utils import scrub_secrets
 from soft_hub.sdk import CancelledError, HubAccount, HubContext
 
@@ -86,6 +92,11 @@ def run(context: HubContext) -> dict[str, Any]:
 
     def worker(hub_account: HubAccount) -> str:
         try:
+            # Anti-sybil: desync parallel workers (core-owned, not a user option).
+            if mode == "daily":
+                account_start_delay(cancel_check=context.check_cancelled)
+            else:
+                parse_account_gap(cancel_check=context.check_cancelled)
             status, meta = _run_account(
                 context,
                 hub_account,
@@ -135,6 +146,9 @@ def run(context: HubContext) -> dict[str, Any]:
             for account in level:
                 context.check_cancelled()
                 worker(account)
+        # Barrier: after parents finish, short random pause before children.
+        if mode == "daily" and level_index + 1 < len(levels):
+            between_levels_delay(cancel_check=context.check_cancelled)
 
     return {
         "total": counters["total"],
@@ -211,6 +225,7 @@ def _ensure_registered(
         message="Проверяем / регистрируем в Checkpoint",
     )
     context.check_cancelled()
+    pre_http_delay(cancel_check=context.check_cancelled)
 
     try:
         register_portfolio_address(session, cfg, child_address)
@@ -254,6 +269,7 @@ def _ensure_registered(
         message="Сажаем на рефералку parent (если нужно)",
     )
     context.check_cancelled()
+    pre_http_delay(cancel_check=context.check_cancelled)
 
     try:
         existing = fetch_referral_status(session, cfg, child_address)
@@ -288,6 +304,7 @@ def _ensure_registered(
         return meta
 
     try:
+        pre_http_delay(cancel_check=context.check_cancelled)
         submit = submit_referral(
             session,
             cfg,
@@ -607,12 +624,15 @@ def _run_account(
 
 def _build_config(context: HubContext) -> AppConfig:
     options = context.options or {}
-    delay = _clamp_float(options.get("delay_seconds", 8), 0.0, 60.0, 8.0)
+    # Action pacing is core-owned (anti-sybil). Not a user-facing option.
+    # timing.action_delay spreads this range further with jitter / long pauses.
+    delay_min = 6.0
+    delay_max = 16.0
     # Checkpoint XP: +5 per trade, max 5 trades/day → 25 XP daily cap (UI: "25 XP daily cap").
     trades = int(_clamp_float(options.get("trades", 5), 1, 5, 5))
     # Per-fill notional is independent of XP: bigger fill ≠ more XP. Soft default
     # raised so offers within the ~$500/day testnet buy budget can be taken.
-    max_usdc = Decimal(str(_clamp_float(options.get("max_usdc_per_fill", 100), 0.01, 500.0, 100.0)))
+    max_usdc = Decimal(str(_clamp_float(options.get("max_usdc_per_fill", 100), 1.0, 500.0, 100.0)))
     # Mint enough test USDC for a full day of fills under the notional cap.
     mint_floor = max(Decimal("50"), max_usdc * Decimal(str(trades)))
     mint_amount = min(Decimal("500"), mint_floor)
@@ -620,8 +640,8 @@ def _build_config(context: HubContext) -> AppConfig:
     return AppConfig(
         max_workers=1,
         shuffle_wallets=False,
-        delay_min=delay,
-        delay_max=delay,
+        delay_min=delay_min,
+        delay_max=delay_max,
         gas_multiplier=1.25,
         receipt_timeout=180,
         min_eth_balance=MIN_ETH,

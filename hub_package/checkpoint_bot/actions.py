@@ -13,7 +13,8 @@ from .market_api import fetch_offers, pick_fill_targets
 from .offer_pool import OfferPool
 from .rewards import fetch_rewards
 from .usdc import approve_market, ensure_usdc
-from .utils import scrub_secrets, sleep_range
+from .timing import action_delay, short_tx_gap, sleep_jitter
+from .utils import scrub_secrets
 
 
 Emit = Callable[[dict[str, Any]], None]
@@ -118,7 +119,7 @@ class WalletActionRunner:
             after = fetch_rewards(c, self.cfg)
             delta = after.total_points - (before.total_points if before else 0)
             if delta == 0 and self.mode in {"full", "daily"}:
-                sleep_range(8, 12)
+                sleep_jitter(8, 14, cancel_check=self.cancel_check)
                 after = fetch_rewards(c, self.cfg)
                 delta = after.total_points - (before.total_points if before else 0)
             self.emit(
@@ -277,7 +278,7 @@ class WalletActionRunner:
                         "details": {"points_id": pid, "error": _safe_exc(exc)},
                     }
                 )
-            sleep_range(self.cfg.delay_min, self.cfg.delay_max)
+            action_delay(self.cfg.delay_min, self.cfg.delay_max, cancel_check=self.cancel_check)
 
     def _trades(self) -> None:
         if not self._ensure_gas():
@@ -298,7 +299,7 @@ class WalletActionRunner:
                         "details": {"amount": str(cfg.mint_usdc_amount)},
                     }
                 )
-                sleep_range(cfg.delay_min, cfg.delay_max)
+                action_delay(cfg.delay_min, cfg.delay_max, cancel_check=self.cancel_check)
         except Exception as exc:
             self.emit(
                 {
@@ -374,7 +375,7 @@ class WalletActionRunner:
                             "details": {"amount_raw": amount_raw},
                         }
                     )
-                    sleep_range(2, 5)
+                    short_tx_gap(cancel_check=self.cancel_check)
 
                 if full and cfg.prefer_full_fill:
                     tx_hash = fill_offer_full(c, cfg, offer.id)
@@ -414,7 +415,7 @@ class WalletActionRunner:
                         },
                     }
                 )
-            sleep_range(cfg.delay_min, cfg.delay_max)
+            action_delay(cfg.delay_min, cfg.delay_max, cancel_check=self.cancel_check)
 
     def _sells(self) -> None:
         if not self._ensure_gas():
@@ -476,4 +477,4 @@ class WalletActionRunner:
                         "details": {"error": _safe_exc(exc)},
                     }
                 )
-            sleep_range(cfg.delay_min, cfg.delay_max)
+            action_delay(cfg.delay_min, cfg.delay_max, cancel_check=self.cancel_check)

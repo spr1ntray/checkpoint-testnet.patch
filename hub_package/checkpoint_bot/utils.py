@@ -25,9 +25,10 @@ def short_hash(value: str | None) -> str:
 
 
 def sleep_range(min_s: float, max_s: float) -> float:
-    delay = random.uniform(float(min_s), float(max_s))
-    time.sleep(delay)
-    return delay
+    """Legacy helper — prefer checkpoint_bot.timing for anti-sybil pacing."""
+    from .timing import sleep_jitter
+
+    return sleep_jitter(min_s, max_s)
 
 
 _PRIVATE_KEY_RE = re.compile(r"(?i)\b(?:0x)?[a-f0-9]{64}\b")

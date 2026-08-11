@@ -30,3 +30,6 @@ logs/*
 .idea/
 .vscode/
 *.swp
+
+# Soft Hub exported run logs (may contain account activity)
+soft-hub-run-*.log
