@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "contract_version": "SH-SOFTWARE-0.6/3",
+  "contract_version": "SH-SOFTWARE-0.6/4",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.5.5",
+  "version": "1.6.0",
   "description": "XP farm на Arbitrum Sepolia.",
   "author": "sprintray",
   "presentation": {
@@ -14,8 +14,11 @@
       "image": "assets/image.png"
     }
   },
+  "catalog": {
+    "sections": ["testnet"]
+  },
   "compatibility": {
-    "hub": ">=0.6.8",
+    "hub": ">=0.6.15",
     "python": ">=3.12,<3.13",
     "os": [
       "darwin"
@@ -81,6 +84,35 @@
         "resources": {
           "account": []
         }
+      },
+      "output": {
+        "mode": "account_table",
+        "title": "Работа",
+        "primary_kind": "account_summary",
+        "columns": [
+          {
+            "key": "fills_ok",
+            "title": "Fills",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "transactions",
+            "title": "Tx",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "referral_linked",
+            "title": "Реферал",
+            "type": "boolean"
+          },
+          {
+            "key": "referral_mismatch",
+            "title": "Чужой реф",
+            "type": "boolean"
+          }
+        ]
       },
       "options": {
         "type": "object",

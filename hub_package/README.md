@@ -1,11 +1,11 @@
-# Checkpoint Testnet — Soft Hub plugin 1.5.5
+# Checkpoint Testnet — Soft Hub plugin 1.6.0
 
-Пакет для **Soft Hub 0.6.8+** (`SH-SOFTWARE-0.6/3`).
+Пакет для **Soft Hub 0.6.15+** (`SH-SOFTWARE-0.6/4`).
 
 ## Установка
 
-Patch Radar → `spr1ntray/checkpoint-testnet.patch` → **1.5.5**,  
-либо Local package: `dist/checkpoint-testnet-1.5.5.softhub.zip`
+Patch Radar → `spr1ntray/checkpoint-testnet.patch` → **1.6.0**,  
+либо Local package: `dist/checkpoint-testnet-1.6.0.softhub.zip`
 
 ## Перед запуском
 
@@ -36,7 +36,7 @@ Patch Radar → `spr1ntray/checkpoint-testnet.patch` → **1.5.5**,
 ```bash
 python3 /path/to/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.5.5.softhub.zip
+  dist/checkpoint-testnet-1.6.0.softhub.zip
 ```
 
 ## Визуал

@@ -31,7 +31,7 @@ from soft_hub.sdk import CancelledError, HubAccount, HubContext
 
 CHAIN_ID = 421614
 # Soft floor for Arbitrum Sepolia — L2 fills are cheap; old 0.0002 blocked funded-but-dust wallets.
-MIN_ETH = Decimal("0.00005")
+MIN_ETH = Decimal("0.00002")
 ACTION_MODES = {
     "inspect": "parse",
     "farm": "daily",

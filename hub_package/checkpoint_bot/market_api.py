@@ -77,43 +77,56 @@ def pick_fill_targets(
 ) -> list[tuple[Offer, int, bool]]:
     """Return list of (offer, usdc_amount_raw, full_fill).
 
-    Prefers cheapest full fills under usdc_max. If none, tries partial fill
-    of the cheapest oversized offer up to usdc_max. usdc_min is a soft floor
-    used only to deprioritize dust after enough normal picks exist.
+    Spend toward usdc_max (testnet daily budget), not the cheapest dust.
+    1) partial-fill oversized offers at exactly usdc_max
+    2) full-fill the largest offers still under usdc_max
+    3) leftover cheapest dust only if nothing else exists
     """
+    import random
+
     picks: list[tuple[Offer, int, bool]] = []
     used_ids: set[int] = set()
     min_raw = int(usdc_min * Decimal(10 ** usdc_decimals))
     max_raw = int(usdc_max * Decimal(10 ** usdc_decimals))
+    floor_raw = max(min_raw, int(max_raw * 0.25)) if max_raw > 0 else 0
 
-    # Pass 1: full fills within [0, max]
-    for offer in offers:
-        if len(picks) >= count:
-            break
-        if offer.id in used_ids:
-            continue
-        notional = offer.remaining_price
-        if notional <= 0 or notional > max_raw:
-            continue
-        picks.append((offer, notional, True))
+    def take(offer: Offer, amount: int, full: bool) -> None:
+        picks.append((offer, amount, full))
         used_ids.add(offer.id)
 
-    # Pass 2: if still short, partial-fill larger offers
-    if len(picks) < count:
-        for offer in offers:
-            if len(picks) >= count:
-                break
-            if offer.id in used_ids:
-                continue
-            notional = offer.remaining_price
-            if notional <= max_raw:
-                continue
-            picks.append((offer, max_raw, False))
-            used_ids.add(offer.id)
+    # Prefer eating the configured budget via partial fills of large books.
+    oversized = [
+        o for o in offers
+        if o.id not in used_ids and o.remaining_price > max_raw > 0
+    ]
+    random.shuffle(oversized)
+    for offer in oversized:
+        if len(picks) >= count:
+            return picks[:count]
+        take(offer, max_raw, False)
 
-    # Soft: if we somehow only have dust and user set a min, still keep them
-    # (max XP = cheapest trades). No further filter.
-    _ = min_raw
+    # Then largest full fills in the upper band of the budget.
+    in_budget = [
+        o for o in offers
+        if o.id not in used_ids and floor_raw <= o.remaining_price <= max_raw
+    ]
+    in_budget.sort(key=lambda o: o.remaining_price, reverse=True)
+    for offer in in_budget:
+        if len(picks) >= count:
+            return picks[:count]
+        take(offer, offer.remaining_price, True)
+
+    # Last resort: any remaining full fill under max (including dust).
+    leftovers = [
+        o for o in offers
+        if o.id not in used_ids and 0 < o.remaining_price <= max_raw
+    ]
+    leftovers.sort(key=lambda o: o.remaining_price, reverse=True)
+    for offer in leftovers:
+        if len(picks) >= count:
+            break
+        take(offer, offer.remaining_price, True)
+
     return picks[:count]
 
 
