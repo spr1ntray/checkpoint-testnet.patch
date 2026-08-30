@@ -33,6 +33,8 @@ class AppConfig:
     request_timeout: int
 
     points_id: int
+    trades_min: int
+    trades_max: int
     trades_per_day: int
     trade_usdc_min: Decimal
     trade_usdc_max: Decimal
@@ -82,6 +84,8 @@ def load_config() -> AppConfig:
         dynamic_api=str(p.DYNAMIC_API).rstrip("/"),
         request_timeout=int(p.REQUEST_TIMEOUT),
         points_id=int(p.POINTS_ID),
+        trades_min=int(getattr(p, "TRADES_MIN", 5)),
+        trades_max=int(getattr(p, "TRADES_MAX", getattr(p, "TRADES_PER_DAY", 5))),
         trades_per_day=int(p.TRADES_PER_DAY),
         trade_usdc_min=Decimal(str(p.TRADE_USDC_MIN)),
         trade_usdc_max=Decimal(str(p.TRADE_USDC_MAX)),

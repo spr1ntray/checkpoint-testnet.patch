@@ -11,6 +11,7 @@ from web3 import Web3
 from .accounts import AccountConfig
 from .abis import ERC20_ABI
 from .config import AppConfig
+from .identity import BrowserIdentity, default_identity
 from .utils import short_address
 
 
@@ -31,21 +32,24 @@ def _inject_poa(w3: Web3) -> None:
 
 
 class CheckpointClient:
-    def __init__(self, cfg: AppConfig, account: AccountConfig) -> None:
+    def __init__(
+        self,
+        cfg: AppConfig,
+        account: AccountConfig,
+        *,
+        identity: BrowserIdentity | None = None,
+    ) -> None:
         self.cfg = cfg
         self.account_cfg = account
         self.account: LocalAccount = Account.from_key(account.private_key)
         self.address = Web3.to_checksum_address(self.account.address)
         self.label = account.label
         self.proxy = account.proxy
+        self.identity = identity or default_identity()
 
         self.http = requests.Session()
-        self.http.headers.update(
-            {
-                "User-Agent": "CheckpointXPFarmer/0.1",
-                "Accept": "application/json",
-            }
-        )
+        self.http.trust_env = False
+        self.http.headers.update(self.identity.headers())
         if self.proxy:
             self.http.proxies.update({"http": self.proxy, "https": self.proxy})
 

@@ -1,43 +1,78 @@
-# Checkpoint Testnet — Soft Hub plugin 1.6.0
+# Checkpoint Testnet — Soft Hub plugin 1.7.15
 
 Пакет для **Soft Hub 0.6.15+** (`SH-SOFTWARE-0.6/4`).
 
 ## Установка
 
-Patch Radar → `spr1ntray/checkpoint-testnet.patch` → **1.6.0**,  
-либо Local package: `dist/checkpoint-testnet-1.6.0.softhub.zip`
+Актуальный пакет (единственный на диске): `dist/checkpoint-testnet.softhub.zip`  
+Версия внутри манифеста: **1.7.15** (`dist/checkpoint-testnet-1.7.15.softhub.zip` — копия того же файла).
 
 ## Перед запуском
 
-1. Аккаунты: `private_key` + `proxy`
-2. Топология рефералов Hub (child → parent)
-3. Для **Работы** — ETH Arbitrum Sepolia на газ
+1. AdsPower запущен, Local API включён, у каждого аккаунта свой profile ID, API key в настройках Hub
+2. Proxy в Hub-аккаунте
+3. Топология рефералов Hub (child → parent)
+4. На **Работе**: если мало Sepolia ETH — Ads открывает [QuickNode drip](https://faucet.quicknode.com/drip), вставляет адрес, выбирает Arbitrum/Sepolia, Continue, затем **Send to** на 0.05 ETH. Invisible reCAPTCHA уходит сама; картинка — только если Google кинет challenge, тогда решаешь в окне профиля. Chrome после крана закрывается, фарм идёт по HTTP
+5. QuickNode: 1 drip / сеть / 12 часов; часто просит ≥ 0.001 ETH в Ethereum mainnet на том же адресе
+
+Buy XP Checkpoint считает только после Kernel UserOps, не после EOA fill.
+
+Mint test USDC идёт **в том же Kernel UserOp, что и сделка**. Перед фармом софт кидает бюджет **420–500 USDC** и число fills в диапазоне настроек (5–10), затем делит бюджет на сделки. Ставку (USDC на fill) пользователь не задаёт.
+
+Кран QuickNode: если на Ethereum mainnet меньше 0.001 ETH — **ошибка**, Ads/QuickNode не открываем. Иначе ждёт reCAPTCHA и не считает скрытый текст «12 hours» за отказ.
 
 ## Действия
 
 | Action | Risk | Что делает |
 |--------|------|------------|
-| **Работа** | testnet_write | Auto-register новых по реф-цепи (parent-first) + mint USDC + fills |
+| **Работа** | testnet_write | При нехватке газа — кран QuickNode в Ads, затем auto-register по реф-цепи + Kernel fills |
 | **Парсинг** | read | ETH / USDC / XP в таблицу |
+
+Кран открывается **только если** на кошельке мало Sepolia ETH. Если ETH уже есть — Ads Chrome не стартует.
+
+Hub при `browser: true` жмёт параллельность до **5** (не 10).
 
 ### Работа и рефералы
 
 - Отдельного режима «Регистрация» **нет**.
 - При **Работе** софт сам:
-  1. индексирует portfolio,
-  2. если parent в топологии и реферала ещё нет — сажает на EVM-адрес parent,
-  3. фармит fills.
+  1. проверяет Ads-профиль,
+  2. если мало газа — кран QuickNode в этом профиле,
+  3. индексирует portfolio,
+  4. если parent в топологии и реферала ещё нет — сажает на EVM-адрес parent,
+  5. фармит Kernel fills через ZeroDev.
 - Уровни `referral_levels` — родители раньше детей.
 - Уже на **чужом** referrer → warning в лог, фарм **продолжается**.
 - Manual invite code не нужен.
 
+0 Sepolia ETH после крана → аккаунт **blocked**, не failed.
+
 ## Сборка
+
+История версий — **git** (ветки + теги), не стопка zip. Скрипт пересобирает только актуальную версию и удаляет старые zip в `dist/`:
+
+```bash
+./scripts/build.sh
+```
+
+Эквивалент вручную:
 
 ```bash
 python3 /path/to/soft-hub/scripts/build_plugin.py \
   hub_package \
-  dist/checkpoint-testnet-1.6.0.softhub.zip
+  dist/checkpoint-testnet.softhub.zip
 ```
+
+### Git (кратко)
+
+| Что | Зачем |
+|-----|--------|
+| ветка `main` | то, что можно ставить |
+| ветка `fix/...` / `feat/...` | одна задача, потом merge в `main` |
+| тег `v1.7.15` | номер релиза = версия в `hub.plugin.json` |
+| `dist/*.zip` в `.gitignore` | артефакт собирается, в git не копится |
+
+Постоянные ветки «на каждый модуль навсегда» **не нужны**: модули уже файлы (`faucet.py`, `kernel_aa.py`, `actions.py`). Ветка живёт, пока чинишь mint/кран, потом вливается в `main` и удаляется.
 
 ## Визуал
 

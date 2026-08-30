@@ -84,12 +84,15 @@ def siwe_login(client: CheckpointClient, cfg: AppConfig, capsolver_api_key: str 
 
     captcha_token = ""
     if cfg.siwe_captcha:
+        identity = getattr(client, "identity", None)
+        user_agent = getattr(identity, "user_agent", "") if identity is not None else ""
         captcha_token = solve_hcaptcha(
             normalize_api_key(capsolver_api_key),
             site_key=cfg.hcaptcha_sitekey or HCAPTCHA_SITEKEY,
             page_url=PAGE_URL,
-            proxy=None,
+            proxy=client.proxy,
             is_enterprise=True,
+            user_agent=user_agent,
         )
 
     body = {

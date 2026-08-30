@@ -4,20 +4,56 @@ import random
 from decimal import Decimal
 from typing import Any, Callable
 
+from eth_abi import encode
+from web3 import Web3
+
 from .auth_siwe import siwe_login
 from .client import CheckpointClient
 from .config import AppConfig
 from .deposit import try_deposit
-from .market import create_offer, fill_offer_full, fill_offer_partial
+from .kernel_aa import KernelAccount, LowGasError
+from .market import create_offer
 from .market_api import fetch_offers, pick_fill_targets
 from .offer_pool import OfferPool
 from .rewards import fetch_rewards
-from .usdc import approve_market, ensure_usdc
-from .timing import action_delay, short_tx_gap, sleep_jitter
+from .session_plan import plan_session
+from .usdc import approve_market
+from .timing import SessionStyle, action_delay, sleep_jitter
 from .utils import scrub_secrets
+from .abis import SEL_FILL_FULL, SEL_FILL_PARTIAL
+
+SEL_MINT = bytes.fromhex("40c10f19")
+SEL_APPROVE = bytes.fromhex("095ea7b3")
 
 
 Emit = Callable[[dict[str, Any]], None]
+
+
+def kernel_fill_calls(
+    *,
+    usdc: str,
+    market: str,
+    approve_data: bytes,
+    fill_data: bytes,
+    mint_data: bytes | None = None,
+) -> list[tuple[str, bytes, int]]:
+    """Kernel execute list for one fill. Mint is first when Kernel USDC is low.
+
+    Checkpoint UI mints test USDC in the same UserOp as the first daily trade.
+    A mint-only UserOp on an undeployed Kernel reverts in
+    eth_estimateUserOperationGas with reason 0x.
+    """
+    calls: list[tuple[str, bytes, int]] = []
+    if mint_data:
+        calls.append((usdc, mint_data, 0))
+    calls.append((usdc, approve_data, 0))
+    calls.append((market, fill_data, 0))
+    return calls
+
+
+def kernel_needs_mint(kernel_usdc_raw: int, fill_raw: int) -> bool:
+    """Mint more test USDC when this fill would exceed Kernel balance."""
+    return int(kernel_usdc_raw) < int(fill_raw)
 
 
 def _safe_exc(exc: Exception, limit: int = 240) -> str:
@@ -26,10 +62,45 @@ def _safe_exc(exc: Exception, limit: int = 240) -> str:
     return (text[:limit] if len(text) > limit else text) or type(exc).__name__
 
 
+def _is_low_gas(exc: Exception) -> bool:
+    if isinstance(exc, LowGasError):
+        return True
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "мало eth",
+            "low_gas",
+            "insufficient funds",
+            "insufficient balance",
+            "aa23",
+            "aa13",
+            "didn't pay prefund",
+            "not enough native",
+            "exceeds the balance of the account",
+        )
+    )
+
+
+def _is_erc20_usdc(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "erc20",
+            "4552433230",  # ASCII "ERC20" in revert hex
+            "transfer amount exceeds",
+            "insufficient allowance",
+        )
+    )
+
+
 def _friendly_fill_error(exc: Exception) -> str:
     text = scrub_secrets(str(exc))
     if "0xe28caf6a" in text or "CannotFillOffer" in text:
         return "CannotFillOffer — offer уже занят/заполнен (гонка)"
+    if _is_erc20_usdc(exc):
+        return "Не хватает USDC на Kernel — доминтим со следующей сделкой"
     if "403" in text and "rpc" in text.lower():
         return "RPC 403 Forbidden — смени RPC / выключи RPC_VIA_PROXY"
     return text[:300]
@@ -46,6 +117,7 @@ class WalletActionRunner:
         offer_pool: OfferPool | None = None,
         capsolver_api_key: str = "",
         cancel_check: Callable[[], None] | None = None,
+        session: SessionStyle | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
@@ -54,10 +126,21 @@ class WalletActionRunner:
         self.offer_pool = offer_pool or OfferPool()
         self.capsolver_api_key = capsolver_api_key
         self.cancel_check = cancel_check
+        self.session = session
+        self.kernel: KernelAccount | None = None
 
     def _cancel(self) -> None:
         if self.cancel_check:
             self.cancel_check()
+
+    def _best_rewards(self) -> Any:
+        snaps = [fetch_rewards(self.client, self.cfg)]
+        if self.kernel is not None:
+            try:
+                snaps.append(fetch_rewards(self.client, self.cfg, self.kernel.sender))
+            except Exception:
+                pass
+        return max(snaps, key=lambda s: s.total_points)
 
     def run(self) -> None:
         self._cancel()
@@ -80,9 +163,15 @@ class WalletActionRunner:
         if self.cfg.siwe_enabled:
             self._siwe()
 
+        if self.mode in {"full", "daily"}:
+            try:
+                self.kernel = KernelAccount(c, self.cfg)
+            except Exception:
+                self.kernel = None
+
         before = None
         try:
-            before = fetch_rewards(c, self.cfg)
+            before = self._best_rewards()
             self.emit(
                 {
                     "label": c.label,
@@ -116,11 +205,11 @@ class WalletActionRunner:
 
         # Indexer XP often lags 1–15+ minutes; quick recheck after short wait
         try:
-            after = fetch_rewards(c, self.cfg)
+            after = self._best_rewards()
             delta = after.total_points - (before.total_points if before else 0)
             if delta == 0 and self.mode in {"full", "daily"}:
                 sleep_jitter(8, 14, cancel_check=self.cancel_check)
-                after = fetch_rewards(c, self.cfg)
+                after = self._best_rewards()
                 delta = after.total_points - (before.total_points if before else 0)
             self.emit(
                 {
@@ -158,7 +247,11 @@ class WalletActionRunner:
         except Exception:
             usdc = None
         try:
-            xp = fetch_rewards(c, self.cfg)
+            try:
+                self.kernel = self.kernel or KernelAccount(c, self.cfg)
+            except Exception:
+                pass
+            xp = self._best_rewards()
             bd = xp.breakdown
             xp_details = {
                 "xp": float(xp.total_points),
@@ -215,23 +308,51 @@ class WalletActionRunner:
                 }
             )
         except Exception as exc:
+            # SIWE is optional for buy XP (Kernel UserOps). Don't fail the farm.
             self.emit(
                 {
                     "label": c.label,
                     "address": c.address,
                     "action": "siwe",
-                    "status": "failed",
+                    "status": "skipped",
                     "tx_hash": None,
                     "details": {"error": _safe_exc(exc, 400)},
                 }
             )
 
+    def _skip_low_gas(self, action: str, exc: Exception | None = None) -> None:
+        eth = ""
+        need = "> 0"
+        if isinstance(exc, LowGasError):
+            eth = exc.eth
+            need = exc.need
+        else:
+            try:
+                eth = f"{self.client.eth_balance():.9f}"
+            except Exception:
+                eth = "0"
+        self.emit(
+            {
+                "label": self.client.label,
+                "address": self.client.address,
+                "action": action,
+                "status": "skipped",
+                "tx_hash": None,
+                "details": {
+                    "reason": "low_gas",
+                    "eth": eth or "0",
+                    "need": need,
+                    "hint": "На кошельке мало ETH (Arbitrum Sepolia)",
+                },
+            }
+        )
+
     def _ensure_gas(self) -> bool:
         c = self.client
         eth = c.eth_balance()
-        # Arbitrum Sepolia fills are cheap; keep a low floor so dust wallets still try.
-        need = self.cfg.min_eth_balance
-        if eth < need:
+        # Do not invent a "minimum gas" reserve. One Sepolia fill is tiny.
+        # Block only empty wallets; otherwise let the tx fail on-chain if needed.
+        if eth <= 0:
             self.emit(
                 {
                     "label": c.label,
@@ -242,8 +363,8 @@ class WalletActionRunner:
                     "details": {
                         "reason": "low_gas",
                         "eth": f"{eth:.9f}",
-                        "need": f"{need:.9f}",
-                        "hint": "Пополни ETH на Arbitrum Sepolia",
+                        "need": "> 0",
+                        "hint": "На кошельке 0 ETH (Arbitrum Sepolia)",
                     },
                 }
             )
@@ -278,28 +399,55 @@ class WalletActionRunner:
                         "details": {"points_id": pid, "error": _safe_exc(exc)},
                     }
                 )
-            action_delay(self.cfg.delay_min, self.cfg.delay_max, cancel_check=self.cancel_check)
+            action_delay(
+                self.cfg.delay_min,
+                self.cfg.delay_max,
+                cancel_check=self.cancel_check,
+                style=self.session,
+            )
+
+    def _xp_address(self, kernel: KernelAccount | None) -> str:
+        return kernel.sender if kernel is not None else self.client.address
 
     def _trades(self) -> None:
-        if not self._ensure_gas():
-            return
+        # Don't skip on empty EOA: ZeroDev paymaster can sponsor Kernel UserOps
+        # on Arbitrum Sepolia without ETH on the owner.
         c = self.client
         cfg = self.cfg
+        kernel = self.kernel
+        try:
+            if kernel is None:
+                kernel = KernelAccount(c, cfg)
+                self.kernel = kernel
+            self.emit(
+                {
+                    "label": c.label,
+                    "address": c.address,
+                    "action": "kernel",
+                    "status": "ok",
+                    "tx_hash": None,
+                    "details": {"kernel": kernel.sender, "deployed": kernel.is_deployed()},
+                }
+            )
+        except Exception as exc:
+            self.emit(
+                {
+                    "label": c.label,
+                    "address": c.address,
+                    "action": "kernel",
+                    "status": "failed",
+                    "tx_hash": None,
+                    "details": {"error": _safe_exc(exc)},
+                }
+            )
+            return
+
+        usdc = Web3.to_checksum_address(cfg.usdc)
+        market = Web3.to_checksum_address(cfg.market)
+        decimals = c.usdc_decimals()
 
         try:
-            tx = ensure_usdc(c, cfg)
-            if tx:
-                self.emit(
-                    {
-                        "label": c.label,
-                        "address": c.address,
-                        "action": "mint_usdc",
-                        "status": "ok",
-                        "tx_hash": tx,
-                        "details": {"amount": str(cfg.mint_usdc_amount)},
-                    }
-                )
-                action_delay(cfg.delay_min, cfg.delay_max, cancel_check=self.cancel_check)
+            usdc_raw = int(c.usdc.functions.balanceOf(kernel.sender).call())
         except Exception as exc:
             self.emit(
                 {
@@ -313,11 +461,29 @@ class WalletActionRunner:
             )
             return
 
+        mint_units = c.to_usdc_units(cfg.mint_usdc_amount)
+        plan = plan_session(trades_min=cfg.trades_min, trades_max=cfg.trades_max)
+        self.emit(
+            {
+                "label": c.label,
+                "address": c.address,
+                "action": "session_plan",
+                "status": "ok",
+                "tx_hash": None,
+                "details": {
+                    "budget_usdc": str(plan.budget_usdc),
+                    "trades": plan.trades,
+                    "fills": [str(x) for x in plan.fills],
+                },
+            }
+        )
+
         filled = 0
         attempts = 0
-        max_attempts = cfg.trades_per_day * 4
+        target_fills = plan.trades
+        max_attempts = target_fills * 4
 
-        while filled < cfg.trades_per_day and attempts < max_attempts:
+        while filled < target_fills and attempts < max_attempts:
             self._cancel()
             attempts += 1
             try:
@@ -335,14 +501,41 @@ class WalletActionRunner:
                 )
                 break
 
+            planned = plan.fills[filled]
+            usdc_min = max(
+                cfg.trade_usdc_min,
+                (planned * Decimal("0.35")).quantize(Decimal("0.01")),
+            )
             targets = pick_fill_targets(
                 offers,
-                usdc_min=cfg.trade_usdc_min,
-                usdc_max=cfg.trade_usdc_max,
+                usdc_min=usdc_min,
+                usdc_max=planned,
                 count=1,
-                usdc_decimals=c.usdc_decimals(),
+                usdc_decimals=decimals,
             )
             if not targets:
+                targets = pick_fill_targets(
+                    offers,
+                    usdc_min=cfg.trade_usdc_min,
+                    usdc_max=planned,
+                    count=1,
+                    usdc_decimals=decimals,
+                )
+            if not targets:
+                if filled == 0 and kernel_needs_mint(usdc_raw, mint_units):
+                    self.emit(
+                        {
+                            "label": c.label,
+                            "address": c.address,
+                            "action": "mint_usdc",
+                            "status": "skipped",
+                            "tx_hash": None,
+                            "details": {
+                                "reason": "no_offers",
+                                "hint": "Mint только вместе со сделкой; offers нет — mint не шлём",
+                            },
+                        }
+                    )
                 self.emit(
                     {
                         "label": c.label,
@@ -363,27 +556,49 @@ class WalletActionRunner:
                 continue
 
             try:
-                approve_tx = approve_market(c, cfg, amount_raw)
-                if approve_tx:
+                approve_amount = max(amount_raw, c.to_usdc_units(cfg.mint_usdc_amount))
+                approve_data = SEL_APPROVE + encode(
+                    ["address", "uint256"], [market, approve_amount]
+                )
+                if full:
+                    fill_data = SEL_FILL_FULL + encode(["uint256"], [int(offer.id)])
+                    kind = "full"
+                else:
+                    fill_data = SEL_FILL_PARTIAL + encode(
+                        ["uint256", "uint256"], [int(offer.id), int(amount_raw)]
+                    )
+                    kind = "partial"
+                batched_mint = kernel_needs_mint(usdc_raw, amount_raw)
+                mint_data = None
+                if batched_mint:
+                    mint_data = SEL_MINT + encode(
+                        ["address", "uint256"], [kernel.sender, mint_units]
+                    )
+                calls = kernel_fill_calls(
+                    usdc=usdc,
+                    market=market,
+                    approve_data=approve_data,
+                    fill_data=fill_data,
+                    mint_data=mint_data,
+                )
+                tx_hash = kernel.send_calls(calls)
+                if batched_mint:
+                    usdc_raw += mint_units
                     self.emit(
                         {
                             "label": c.label,
                             "address": c.address,
-                            "action": "approve_usdc",
+                            "action": "mint_usdc",
                             "status": "ok",
-                            "tx_hash": approve_tx,
-                            "details": {"amount_raw": amount_raw},
+                            "tx_hash": tx_hash,
+                            "details": {
+                                "amount": str(cfg.mint_usdc_amount),
+                                "via": "kernel_with_fill",
+                                "offer_id": offer.id,
+                            },
                         }
                     )
-                    short_tx_gap(cancel_check=self.cancel_check)
-
-                if full and cfg.prefer_full_fill:
-                    tx_hash = fill_offer_full(c, cfg, offer.id)
-                    kind = "full"
-                else:
-                    tx_hash = fill_offer_partial(c, cfg, offer.id, amount_raw)
-                    kind = "partial"
-
+                usdc_raw -= amount_raw
                 filled += 1
                 self.emit(
                     {
@@ -397,11 +612,32 @@ class WalletActionRunner:
                             "kind": kind,
                             "usdc": str(c.from_usdc_units(amount_raw)),
                             "points_id": offer.points_id,
+                            "via": "kernel",
+                            "minted": batched_mint,
                         },
                     }
                 )
             except Exception as exc:
-                # leave claimed so others don't retry a dead offer immediately
+                if _is_low_gas(exc) and not _is_erc20_usdc(exc):
+                    self._skip_low_gas("fill", exc)
+                    break
+                if _is_erc20_usdc(exc):
+                    usdc_raw = 0
+                    self.emit(
+                        {
+                            "label": c.label,
+                            "address": c.address,
+                            "action": "fill",
+                            "status": "skipped",
+                            "tx_hash": None,
+                            "details": {
+                                "offer_id": offer.id,
+                                "reason": "low_usdc",
+                                "hint": _friendly_fill_error(exc),
+                            },
+                        }
+                    )
+                    continue
                 self.emit(
                     {
                         "label": c.label,
@@ -412,10 +648,16 @@ class WalletActionRunner:
                         "details": {
                             "offer_id": offer.id,
                             "error": _friendly_fill_error(exc),
+                            "batched_mint": kernel_needs_mint(usdc_raw, amount_raw),
                         },
                     }
                 )
-            action_delay(cfg.delay_min, cfg.delay_max, cancel_check=self.cancel_check)
+            action_delay(
+                cfg.delay_min,
+                cfg.delay_max,
+                cancel_check=self.cancel_check,
+                style=self.session,
+            )
 
     def _sells(self) -> None:
         if not self._ensure_gas():

@@ -33,3 +33,11 @@ logs/*
 
 # Soft Hub exported run logs (may contain account activity)
 soft-hub-run-*.log
+
+# Built Hub packages — git tags/commits are the version history.
+# dist/ keeps only the current zip (see scripts/build.sh).
+dist/*.softhub.zip
+dist/*.zip
+
+# Dumped third-party reference, not this product
+sekai_testnet/

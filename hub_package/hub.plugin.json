@@ -3,12 +3,12 @@
   "contract_version": "SH-SOFTWARE-0.6/4",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.6.0",
-  "description": "XP farm на Arbitrum Sepolia.",
+  "version": "1.7.15",
+  "description": "XP farm на Arbitrum Sepolia: кран QuickNode через Ads при нехватке газа, HTTP + Kernel fills. Mint USDC вместе с первой сделкой.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
-    "description": "Работа и парсинг Checkpoint XP.",
+    "description": "Работа: кран QuickNode в Ads, реф-цепь, Kernel fills. Парсинг XP.",
     "assets": {
       "icon": "assets/icon.png",
       "image": "assets/image.png"
@@ -36,43 +36,61 @@
   "permissions": {
     "secrets": [
       "evm_private_key",
-      "proxy"
+      "proxy",
+      "adspower_profile",
+      "adspower_api_key"
     ],
     "network": [
       "arbitrum-sepolia-rpc.publicnode.com",
       "sepolia-rollup.arbitrum.io",
+      "arbitrum-sepolia.drpc.org",
       "arbitrum-sepolia.gateway.tenderly.co",
       "arbitrum-sepolia.public.blastapi.io",
       "checkpoint-data-market-api.dorimebest.workers.dev",
       "oracle.checkpoint.exchange",
-      "checkpoint.exchange"
+      "checkpoint.exchange",
+      "rpc.zerodev.app",
+      "faucet.quicknode.com",
+      "ethereum.publicnode.com",
+      "cloudflare-eth.com",
+      "eth.llamarpc.com",
+      "www.google.com",
+      "www.gstatic.com",
+      "www.recaptcha.net",
+      "local.adspower.net",
+      "local.adspower.com"
     ],
     "chains": [
       421614
     ],
     "financial_risk": "testnet",
-    "browser": false,
-    "local_services": []
+    "browser": true,
+    "local_services": ["adspower"]
   },
   "actions": [
     {
       "id": "farm",
       "name": "Работа",
-      "description": "Регистрация по реф-цепи и farm fills.",
+      "description": "Если мало Sepolia ETH — кран QuickNode в Ads. Затем реф-цепь и Kernel fills.",
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
         "secrets": [
           "evm_private_key",
-          "proxy"
+          "proxy",
+          "adspower_profile",
+          "adspower_api_key"
         ]
       },
       "resources": {
         "account": [
           "private_key",
-          "proxy"
+          "proxy",
+          "adspower_profile"
         ],
-        "settings": []
+        "settings": [
+          "adspower_api"
+        ]
       },
       "referral": {
         "mode": "project_runtime",
@@ -103,6 +121,11 @@
             "aggregate": "sum"
           },
           {
+            "key": "faucet_claimed",
+            "title": "Кран",
+            "type": "boolean"
+          },
+          {
             "key": "referral_linked",
             "title": "Реферал",
             "type": "boolean"
@@ -120,10 +143,10 @@
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько профилей одного уровня сразу. Между уровнями цепи — barrier.",
-            "default": 3,
+            "description": "Сколько AdsPower-профилей одного уровня сразу. Hub при browser=true жмёт до 5.",
+            "default": 2,
             "minimum": 1,
-            "maximum": 10,
+            "maximum": 5,
             "multipleOf": 1,
             "x-ui": {
               "group": "Выполнение",
@@ -131,32 +154,36 @@
               "unit": "аккаунтов"
             }
           },
-          "trades": {
+          "trades_min": {
             "type": "integer",
             "title": "Количество fills",
-            "description": "XP: +5 за fill, кап 5/день (25 XP).",
-            "minimum": 1,
-            "maximum": 5,
+            "description": "Сколько сделок за аккаунт. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Checkpoint XP кап ~5/день; больше — объём.",
+            "minimum": 5,
+            "maximum": 10,
             "default": 5,
             "multipleOf": 1,
             "x-ui": {
               "group": "Фарм",
               "order": 10,
-              "unit": "fills"
+              "unit": "fills",
+              "control": "dual_range",
+              "range": {"id": "fills", "role": "from"}
             }
           },
-          "max_usdc_per_fill": {
-            "type": "number",
-            "title": "Макс. USDC на fill",
-            "description": "Notional одной сделки. Бюджет testnet ~$500/день.",
-            "minimum": 1,
-            "maximum": 500,
-            "default": 100,
+          "trades_max": {
+            "type": "integer",
+            "title": "Количество fills",
+            "description": "Сколько сделок за аккаунт. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Checkpoint XP кап ~5/день; больше — объём.",
+            "minimum": 5,
+            "maximum": 10,
+            "default": 7,
             "multipleOf": 1,
             "x-ui": {
               "group": "Фарм",
-              "order": 20,
-              "unit": "USDC"
+              "order": 11,
+              "unit": "fills",
+              "control": "dual_range",
+              "range": {"id": "fills", "role": "to"}
             }
           }
         },
@@ -238,7 +265,7 @@
             "description": "Сколько профилей обрабатывать сразу.",
             "default": 5,
             "minimum": 1,
-            "maximum": 20,
+            "maximum": 5,
             "multipleOf": 1,
             "x-ui": {
               "group": "Выполнение",

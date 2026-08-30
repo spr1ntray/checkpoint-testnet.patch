@@ -18,15 +18,19 @@ def address_from_account(account: AccountConfig) -> str:
     return Web3.to_checksum_address(Account.from_key(account.private_key).address)
 
 
-def make_session(proxy: str | None) -> requests.Session:
+def make_session(proxy: str | None, headers: dict[str, str] | None = None) -> requests.Session:
     session = requests.Session()
+    session.trust_env = False
     session.headers.update(
         {
-            "User-Agent": "CheckpointXPFarmer/1.4",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
             "Accept": "application/json",
             "Origin": CHECKPOINT_ORIGIN,
+            "Referer": f"{CHECKPOINT_ORIGIN}/",
         }
     )
+    if headers:
+        session.headers.update(headers)
     if proxy:
         session.proxies.update({"http": proxy, "https": proxy})
     return session

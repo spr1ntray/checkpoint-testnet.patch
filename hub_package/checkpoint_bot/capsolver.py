@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -56,6 +57,44 @@ def get_balance(api_key: str) -> float:
     return float(bal)
 
 
+def proxy_task_fields(proxy: str | None) -> dict[str, Any]:
+    """Capsolver proxy fields. Hub stores `http://user:pass@host:port` — keep that URL."""
+    raw = (proxy or "").strip()
+    if not raw:
+        return {}
+    if "://" not in raw:
+        raw = "http://" + raw
+    parsed = urlparse(raw)
+    host = parsed.hostname or ""
+    port = parsed.port
+    if not host or not port:
+        raise CapsolverError("Capsolver: не разобрали proxy")
+    scheme = (parsed.scheme or "http").lower()
+    if scheme in {"socks5", "socks5h"}:
+        ptype = "socks5"
+    elif scheme in {"socks4", "socks4a"}:
+        ptype = "socks4"
+    else:
+        ptype = "http"
+    fields: dict[str, Any] = {
+        "proxyType": ptype,
+        "proxyAddress": host,
+        "proxyPort": int(port),
+        "proxy": raw,
+    }
+    user = unquote(parsed.username) if parsed.username else ""
+    password = unquote(parsed.password) if parsed.password else ""
+    if user:
+        fields["proxyLogin"] = user
+        fields["proxyPassword"] = password
+    return fields
+
+
+def _unsupported_hcaptcha(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "not supported" in text or "unsupport" in text or "deprecated" in text
+
+
 def solve_hcaptcha(
     api_key: str,
     *,
@@ -63,39 +102,26 @@ def solve_hcaptcha(
     page_url: str,
     proxy: str | None = None,
     is_enterprise: bool = True,
+    user_agent: str = "",
     timeout_seconds: int = 180,
 ) -> str:
     """Solve hCaptcha via Capsolver. Returns token string for Dynamic captchaToken."""
     key = normalize_api_key(api_key)
     if not key:
-        raise CapsolverError(
-            "Capsolver API key пустой — положи в input/capsolver_api_key.txt и пересоздай базу"
-        )
+        raise CapsolverError("Capsolver API key пустой")
 
-    # Validate key early with clear message
     try:
         bal = get_balance(key)
     except CapsolverError as exc:
-        raise CapsolverError(
-            f"Capsolver key не принят ({exc}). "
-            "Проверь ключ в dashboard capsolver.com → API Key, "
-            "перезапиши input/capsolver_api_key.txt (одна строка, без кавычек) и пересоздай базу."
-        ) from exc
+        raise CapsolverError(f"Capsolver key не принят ({exc})") from exc
 
     if bal <= 0:
         raise CapsolverError(f"Capsolver balance = {bal}. Пополни баланс на capsolver.com")
 
-    # Capsolver historically used both spellings; try preferred first.
-    type_candidates: list[str]
-    if proxy:
-        type_candidates = ["HCaptchaTask", "HCaptchaEnterpriseTask"]
-    else:
-        type_candidates = [
-            "HCaptchaTaskProxyLess",
-            "HCaptchaTaskProxyless",
-            "HCaptchaEnterpriseTaskProxyLess",
-            "HCaptchaEnterpriseTaskProxyless",
-        ]
+    # Official token catalog no longer lists hCaptcha. HCaptchaTask may still
+    # work on older keys. Do not send the retired enterprise task type.
+    type_candidates = ["HCaptchaTask"] if proxy else ["HCaptchaTaskProxyLess", "HCaptchaTaskProxyless"]
+    proxy_fields = proxy_task_fields(proxy) if proxy else {}
 
     last_err: Exception | None = None
     for task_type in type_candidates:
@@ -104,11 +130,12 @@ def solve_hcaptcha(
             "websiteURL": page_url,
             "websiteKey": site_key,
         }
-        if is_enterprise and "Enterprise" not in task_type:
+        if is_enterprise:
             task["isEnterprise"] = True
+        if user_agent:
+            task["userAgent"] = user_agent
         if proxy and "ProxyLess" not in task_type and "Proxyless" not in task_type:
-            # Capsolver proxy string formats: "ip:port:user:pass" or full URL
-            task["proxy"] = proxy.replace("http://", "").replace("https://", "")
+            task["proxy"] = str(proxy_fields.get("proxy") or proxy)
 
         try:
             created = _post(
@@ -123,15 +150,16 @@ def solve_hcaptcha(
             return token
         except CapsolverError as exc:
             last_err = exc
-            # Invalid key / balance — no point trying other types
             msg = str(exc).lower()
             if "invalid" in msg and "key" in msg:
                 raise
             if "balance" in msg:
                 raise
+            if _unsupported_hcaptcha(exc):
+                raise CapsolverError("Capsolver не решает hCaptcha") from exc
             continue
 
-    raise CapsolverError(f"все task types failed: {last_err}")
+    raise CapsolverError(f"hCaptcha не решилась: {last_err}")
 
 
 def _poll_result(api_key: str, task_id: str, *, timeout_seconds: int) -> str:
