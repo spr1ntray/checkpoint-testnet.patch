@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import time
 from decimal import Decimal
 from typing import Any, Callable
 
@@ -13,7 +14,14 @@ from .config import AppConfig
 from .deposit import try_deposit
 from .kernel_aa import KernelAccount, LowGasError
 from .market import create_offer
-from .market_api import fetch_offers, pick_fill_targets
+from .market_api import (
+    OFFER_POLL_MAX_SEC,
+    OFFER_POLL_MIN_SEC,
+    OFFER_WAIT_SECONDS,
+    fetch_offers,
+    list_markets,
+    pick_fill_targets,
+)
 from .offer_pool import OfferPool
 from .rewards import fetch_rewards
 from .session_plan import plan_session
@@ -63,23 +71,8 @@ def _safe_exc(exc: Exception, limit: int = 240) -> str:
 
 
 def _is_low_gas(exc: Exception) -> bool:
-    if isinstance(exc, LowGasError):
-        return True
-    text = str(exc).lower()
-    return any(
-        token in text
-        for token in (
-            "мало eth",
-            "low_gas",
-            "insufficient funds",
-            "insufficient balance",
-            "aa23",
-            "aa13",
-            "didn't pay prefund",
-            "not enough native",
-            "exceeds the balance of the account",
-        )
-    )
+    """Only our explicit empty-EOA signal. Bundler AA21/AA23 is not an empty wallet."""
+    return isinstance(exc, LowGasError)
 
 
 def _is_erc20_usdc(exc: Exception) -> bool:
@@ -118,6 +111,7 @@ class WalletActionRunner:
         capsolver_api_key: str = "",
         cancel_check: Callable[[], None] | None = None,
         session: SessionStyle | None = None,
+        offer_wait_seconds: float | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
@@ -128,6 +122,9 @@ class WalletActionRunner:
         self.cancel_check = cancel_check
         self.session = session
         self.kernel: KernelAccount | None = None
+        self.offer_wait_seconds = (
+            OFFER_WAIT_SECONDS if offer_wait_seconds is None else float(offer_wait_seconds)
+        )
 
     def _cancel(self) -> None:
         if self.cancel_check:
@@ -340,6 +337,7 @@ class WalletActionRunner:
                 "tx_hash": None,
                 "details": {
                     "reason": "low_gas",
+                    "error": _safe_exc(exc) if exc is not None else None,
                     "eth": eth or "0",
                     "need": need,
                     "hint": "На кошельке мало ETH (Arbitrum Sepolia)",
@@ -481,13 +479,21 @@ class WalletActionRunner:
         filled = 0
         attempts = 0
         target_fills = plan.trades
-        max_attempts = target_fills * 4
+        max_attempts = target_fills * 12
+        markets = list_markets(c, cfg)
+        market_idx = 0
+        dry_since: float | None = None
+        halted = False
 
         while filled < target_fills and attempts < max_attempts:
             self._cancel()
-            attempts += 1
+            if market_idx >= len(markets):
+                break
+            points_id = markets[market_idx].points_id
             try:
-                offers = self.offer_pool.filter_available(fetch_offers(c, cfg))
+                offers = self.offer_pool.filter_available(
+                    fetch_offers(c, cfg, points_id=points_id)
+                )
             except Exception as exc:
                 self.emit(
                     {
@@ -496,10 +502,10 @@ class WalletActionRunner:
                         "action": "fetch_offers",
                         "status": "failed",
                         "tx_hash": None,
-                        "details": {"error": _safe_exc(exc)},
+                        "details": {"error": _safe_exc(exc), "points_id": points_id},
                     }
                 )
-                break
+                offers = []
 
             planned = plan.fills[filled]
             usdc_min = max(
@@ -522,38 +528,55 @@ class WalletActionRunner:
                     usdc_decimals=decimals,
                 )
             if not targets:
-                if filled == 0 and kernel_needs_mint(usdc_raw, mint_units):
+                now = time.monotonic()
+                wait_s = max(0.0, self.offer_wait_seconds)
+                if dry_since is None and wait_s > 0:
+                    dry_since = now
                     self.emit(
                         {
                             "label": c.label,
                             "address": c.address,
-                            "action": "mint_usdc",
-                            "status": "skipped",
+                            "action": "offer_wait",
+                            "status": "ok",
                             "tx_hash": None,
                             "details": {
-                                "reason": "no_offers",
-                                "hint": "Mint только вместе со сделкой; offers нет — mint не шлём",
+                                "points_id": points_id,
+                                "wait_s": int(wait_s),
+                                "active": markets[market_idx].active_offers,
                             },
                         }
                     )
-                self.emit(
-                    {
-                        "label": c.label,
-                        "address": c.address,
-                        "action": "fill",
-                        "status": "skipped",
-                        "tx_hash": None,
-                        "details": {
-                            "reason": "no_offers",
-                            "hint": "Нет подходящих offers в диапазоне USDC",
-                        },
-                    }
-                )
-                break
+                if dry_since is None or now - dry_since >= wait_s:
+                    nxt = market_idx + 1
+                    self.emit(
+                        {
+                            "label": c.label,
+                            "address": c.address,
+                            "action": "offer_switch",
+                            "status": "ok",
+                            "tx_hash": None,
+                            "details": {
+                                "from_points_id": points_id,
+                                "to_points_id": (
+                                    markets[nxt].points_id if nxt < len(markets) else None
+                                ),
+                                "waited_s": int(0 if dry_since is None else now - dry_since),
+                            },
+                        }
+                    )
+                    market_idx = nxt
+                    dry_since = None
+                    continue
+                poll_hi = min(OFFER_POLL_MAX_SEC, wait_s)
+                poll_lo = min(OFFER_POLL_MIN_SEC, poll_hi)
+                sleep_jitter(poll_lo, poll_hi, cancel_check=self.cancel_check)
+                continue
 
+            dry_since = None
             offer, amount_raw, full = targets[0]
             if not self.offer_pool.claim(offer.id):
                 continue
+            attempts += 1
 
             try:
                 approve_amount = max(amount_raw, c.to_usdc_units(cfg.mint_usdc_amount))
@@ -620,6 +643,7 @@ class WalletActionRunner:
             except Exception as exc:
                 if _is_low_gas(exc) and not _is_erc20_usdc(exc):
                     self._skip_low_gas("fill", exc)
+                    halted = True
                     break
                 if _is_erc20_usdc(exc):
                     usdc_raw = 0
@@ -657,6 +681,35 @@ class WalletActionRunner:
                 cfg.delay_max,
                 cancel_check=self.cancel_check,
                 style=self.session,
+            )
+
+        if filled < target_fills and not halted:
+            if filled == 0 and kernel_needs_mint(usdc_raw, mint_units):
+                self.emit(
+                    {
+                        "label": c.label,
+                        "address": c.address,
+                        "action": "mint_usdc",
+                        "status": "skipped",
+                        "tx_hash": None,
+                        "details": {
+                            "reason": "no_offers",
+                            "hint": "Mint только вместе со сделкой; offers нет — mint не шлём",
+                        },
+                    }
+                )
+            self.emit(
+                {
+                    "label": c.label,
+                    "address": c.address,
+                    "action": "fill",
+                    "status": "skipped",
+                    "tx_hash": None,
+                    "details": {
+                        "reason": "no_offers",
+                        "hint": "Нет подходящих offers — ждали рынки и ушли дальше",
+                    },
+                }
             )
 
     def _sells(self) -> None:

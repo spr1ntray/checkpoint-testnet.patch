@@ -79,5 +79,25 @@ class KernelMintBatchTests(unittest.TestCase):
         self.assertIn("USDC", _friendly_fill_error(err))
 
 
+    def test_clamp_verification_gas_floor(self) -> None:
+        from checkpoint_bot.kernel_aa import MIN_VERIFICATION_GAS, clamp_user_op_gas
+
+        op = {"verificationGasLimit": "0x0"}
+        clamp_user_op_gas(op)
+        self.assertGreaterEqual(int(op["verificationGasLimit"], 16), MIN_VERIFICATION_GAS)
+        op = {"verificationGasLimit": hex(50_000)}
+        clamp_user_op_gas(op)
+        self.assertEqual(int(op["verificationGasLimit"], 16), 50_000)
+        clamp_user_op_gas(op, floor=80_000)
+        self.assertEqual(int(op["verificationGasLimit"], 16), 80_000)
+
+    def test_paymaster_prefund_is_retried_self_funded(self) -> None:
+        from checkpoint_bot.kernel_aa import _should_retry_self_funded
+
+        self.assertTrue(_should_retry_self_funded(RuntimeError("AA21 didn't pay prefund")))
+        self.assertTrue(_should_retry_self_funded(RuntimeError("AA23")))
+        self.assertFalse(_should_retry_self_funded(RuntimeError("zerodev HTTP 403 allowlist")))
+
+
 if __name__ == "__main__":
     unittest.main()

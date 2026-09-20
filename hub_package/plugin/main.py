@@ -126,6 +126,11 @@ def run(context: HubContext) -> dict[str, Any]:
             "SIWE пропускаем — Capsolver не решает hCaptcha. Kernel fills без логина",
             data={"siwe": False},
         )
+        context.log(
+            "Ads Chrome открывается только для крана QuickNode, если Sepolia ETH = 0. "
+            "Если газ уже есть — фарм идёт по HTTP без окна профиля.",
+            data={"ads_chrome": "faucet_only"},
+        )
 
     def worker(hub_account: HubAccount) -> str:
         if hub_account.id in blocked_pre:
@@ -776,6 +781,22 @@ def _run_account(
                     stage=stage,
                     progress=prog,
                     message=f"{action}: {status}",
+                )
+            elif action in {"offer_wait", "offer_switch"} and status == "ok":
+                pid = details.get("points_id") or details.get("from_points_id")
+                if action == "offer_wait":
+                    msg = f"Ждём ордера на рынке {pid} до {details.get('wait_s')}с"
+                else:
+                    msg = (
+                        f"Рынок {details.get('from_points_id')} пустой — "
+                        f"идём на {details.get('to_points_id')}"
+                    )
+                context.account_state(
+                    hub_account.id,
+                    status="running",
+                    stage=action,
+                    progress=max_progress,
+                    message=msg,
                 )
 
             level = "error" if status == "failed" else "warning" if status == "skipped" else "info"

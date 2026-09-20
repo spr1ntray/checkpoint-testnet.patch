@@ -133,8 +133,15 @@ class AdsPowerSafetyTests(unittest.TestCase):
         from checkpoint_bot.kernel_aa import LowGasError
 
         self.assertTrue(_is_low_gas(LowGasError("Мало ETH на газ", eth="0", need="0.00008")))
-        self.assertTrue(_is_low_gas(RuntimeError("insufficient funds for gas * price + value")))
+        self.assertFalse(_is_low_gas(RuntimeError("insufficient funds for gas * price + value")))
+        self.assertFalse(_is_low_gas(RuntimeError("AA21 didn't pay prefund")))
+        self.assertFalse(_is_low_gas(RuntimeError("AA23 paymaster validation")))
         self.assertFalse(_is_low_gas(RuntimeError("zerodev HTTP 403 allowlist")))
+        self.assertFalse(
+            _is_low_gas(
+                RuntimeError("zerodev eth_sendUserOperation: verificationGasLimit must be at least 10000")
+            )
+        )
 
     def test_match_profile_row_v1_and_v2(self) -> None:
         v1 = {
@@ -276,13 +283,19 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertFalse(needs_mainnet_for_faucet(MAINNET_NEED_WEI))
         self.assertEqual(MAINNET_NEED_WEI, 10**15)
 
-    def test_manifest_1_7_15_ads_faucet(self) -> None:
+    def test_manifest_1_7_20_ads_faucet(self) -> None:
         import json
         from pathlib import Path
 
+        from checkpoint_bot import __version__
+
         root = Path(__file__).resolve().parents[1] / "hub_package"
         manifest = json.loads((root / "hub.plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.7.15")
+        self.assertEqual(manifest["version"], "1.7.20")
+        self.assertEqual(__version__, "1.7.20")
+        self.assertIsInstance(__version__, str)
+        self.assertEqual(manifest["contract_version"], "SH-SOFTWARE-0.6/5")
+        self.assertEqual(manifest["compatibility"]["hub"], ">=0.6.22")
         self.assertTrue(manifest["permissions"]["browser"])
         self.assertEqual(manifest["permissions"]["local_services"], ["adspower"])
         self.assertIn("adspower_profile", manifest["permissions"]["secrets"])
@@ -290,7 +303,8 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertIn("faucet.quicknode.com", manifest["permissions"]["network"])
         self.assertIn("local.adspower.com", manifest["permissions"]["network"])
         farm = next(action for action in manifest["actions"] if action["id"] == "farm")
-        self.assertEqual(farm["options"]["properties"]["account_concurrency"]["maximum"], 5)
+        self.assertEqual(farm["options"]["properties"]["account_concurrency"]["maximum"], 20)
+        self.assertEqual(farm["options"]["properties"]["account_concurrency"]["default"], 20)
         props = farm["options"]["properties"]
         self.assertEqual(props["trades_min"]["minimum"], 5)
         self.assertEqual(props["trades_max"]["maximum"], 10)
@@ -307,12 +321,21 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertIn("adspower_profile", farm["permissions"]["secrets"])
         self.assertNotIn("capsolver_api_key", farm["permissions"]["secrets"])
         inspect_action = next(action for action in manifest["actions"] if action["id"] == "inspect")
-        self.assertEqual(inspect_action["options"]["properties"]["account_concurrency"]["maximum"], 5)
+        self.assertEqual(inspect_action["options"]["properties"]["account_concurrency"]["maximum"], 20)
+        self.assertEqual(inspect_action["options"]["properties"]["account_concurrency"]["default"], 20)
         self.assertNotIn("adspower_profile", inspect_action["permissions"]["secrets"])
         self.assertNotIn("capsolver_api_key", inspect_action["permissions"]["secrets"])
         kernel = (root / "checkpoint_bot" / "kernel_aa.py").read_text(encoding="utf-8")
+        main = (root / "plugin" / "main.py").read_text(encoding="utf-8")
         self.assertIn("hex(self.cfg.chain_id), None]", kernel)
         self.assertIn("playwright", (root / "requirements.txt").read_text())
+        self.assertIn('ads_chrome": "faucet_only"', main)
+        market_api = (root / "checkpoint_bot" / "market_api.py").read_text(encoding="utf-8")
+        self.assertIn("OPEN_OFFER_STATUSES", market_api)
+        self.assertIn("OFFER_WAIT_SECONDS = 300", market_api)
+        actions = (root / "checkpoint_bot" / "actions.py").read_text(encoding="utf-8")
+        self.assertIn("offer_switch", actions)
+        self.assertIn("list_markets", actions)
 
 
 if __name__ == "__main__":

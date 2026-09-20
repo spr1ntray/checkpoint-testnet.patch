@@ -1,11 +1,11 @@
 # Checkpoint Testnet
 
-Софт для фарма **Checkpoint XP** на **Arbitrum Sepolia** (Soft Hub 0.6.15+).
+Софт для фарма **Checkpoint XP** на **Arbitrum Sepolia** (Soft Hub 0.6.22+).
 
 ## Soft Hub
 
-Актуальный пакет: `dist/checkpoint-testnet.softhub.zip` (сейчас **1.7.15**).  
-Старые zip в `dist/` не копим — версия живёт в git (ветки + теги `v1.7.15`).
+Актуальный пакет: `dist/checkpoint-testnet.softhub.zip` (сейчас **1.7.20**).  
+Старые zip в `dist/` не копим — версия живёт в git (ветки + теги `v1.7.20`).
 
 Repo: https://github.com/spr1ntray/checkpoint-testnet.patch
 

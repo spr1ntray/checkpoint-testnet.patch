@@ -6,6 +6,7 @@ sends UserOperations through rpc.zerodev.app with ECDSA validator + paymaster.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -59,6 +60,9 @@ DUMMY_SIG = bytes.fromhex(
     "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
     "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
 )
+# ZeroDev bundler (EP 0.7) rejects UserOps below this verification gas.
+MIN_VERIFICATION_GAS = 10_000
+_VGL_NEED_RE = re.compile(r"verificationGasLimit must be at least (\d+)", re.I)
 
 
 def _sel(sig: str) -> bytes:
@@ -79,6 +83,25 @@ def _paymaster_refused(exc: Exception) -> bool:
             "erc20 gas",
             "gas token",
             "gas sponsoring",
+        )
+    )
+
+
+def _should_retry_self_funded(exc: Exception) -> bool:
+    """Paymaster stub lied or bundler wants native on the Kernel sender."""
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "aa21",
+            "aa23",
+            "aa13",
+            "didn't pay prefund",
+            "did not pay prefund",
+            "paymaster",
+            "insufficient funds",
+            "not enough native",
+            "exceeds the balance of the account",
         )
     )
 
@@ -108,6 +131,22 @@ def _int(x: Any) -> int:
     if isinstance(x, int):
         return x
     return int(str(x), 16) if str(x).startswith("0x") else int(x)
+
+
+def clamp_user_op_gas(user_op: dict[str, Any], *, floor: int | None = None) -> dict[str, Any]:
+    """Bundler rejects verificationGasLimit below 10000 even if estimate returned 0."""
+    need = MIN_VERIFICATION_GAS if floor is None else max(MIN_VERIFICATION_GAS, int(floor))
+    current = _int(user_op.get("verificationGasLimit") or 0)
+    if current < need:
+        user_op["verificationGasLimit"] = _hex(need)
+    return user_op
+
+
+def _verification_gas_floor_from_error(exc: Exception) -> int | None:
+    match = _VGL_NEED_RE.search(str(exc))
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _pack_u128_pair(hi: int, lo: int) -> bytes:
@@ -261,10 +300,27 @@ class KernelAccount:
                 raise
             sponsored = False
 
-        if not sponsored:
+        # selfFunded bundler: keep native on the Kernel even if a stub paymaster
+        # appeared. Empty EOA is only fatal when there is no sponsor either.
+        try:
             self._fund_sender_if_needed()
+        except LowGasError:
+            if not sponsored:
+                raise
+
+        if not sponsored:
             user_op = self._unsigned_user_op(call_data, factory, factory_data, prices)
 
+        try:
+            return self._estimate_sign_send(user_op, sponsored=sponsored)
+        except Exception as exc:
+            if not sponsored or not _should_retry_self_funded(exc):
+                raise
+            self._fund_sender_if_needed()
+            user_op = self._unsigned_user_op(call_data, factory, factory_data, prices)
+            return self._estimate_sign_send(user_op, sponsored=False)
+
+    def _estimate_sign_send(self, user_op: dict[str, Any], *, sponsored: bool) -> str:
         gas = self._rpc("eth_estimateUserOperationGas", [user_op, ENTRY_POINT]) or {}
         if isinstance(gas, dict):
             for k in (
@@ -276,6 +332,7 @@ class KernelAccount:
             ):
                 if gas.get(k):
                     user_op[k] = gas[k]
+        clamp_user_op_gas(user_op)
 
         if sponsored:
             pm = self._rpc(
@@ -284,9 +341,18 @@ class KernelAccount:
             ) or {}
             if isinstance(pm, dict):
                 user_op.update({k: v for k, v in pm.items() if v is not None})
+            clamp_user_op_gas(user_op)
 
         user_op["signature"] = self._sign(user_op)
-        op_hash = self._rpc("eth_sendUserOperation", [user_op, ENTRY_POINT])
+        try:
+            op_hash = self._rpc("eth_sendUserOperation", [user_op, ENTRY_POINT])
+        except RuntimeError as exc:
+            floor = _verification_gas_floor_from_error(exc)
+            if floor is None:
+                raise
+            clamp_user_op_gas(user_op, floor=floor)
+            user_op["signature"] = self._sign(user_op)
+            op_hash = self._rpc("eth_sendUserOperation", [user_op, ENTRY_POINT])
         if not op_hash:
             raise RuntimeError("zerodev sendUserOperation empty")
         return self._wait_receipt(str(op_hash))
@@ -334,7 +400,14 @@ class KernelAccount:
                 need=str(Web3.from_wei(need, "ether")),
             )
         send_amt = need if eoa > need else eoa
-        self.client.send_tx({"to": self.sender, "value": int(send_amt)})
+        try:
+            self.client.send_tx({"to": self.sender, "value": int(send_amt)})
+        except Exception as exc:
+            raise LowGasError(
+                "Мало ETH на газ",
+                eth=str(Web3.from_wei(eoa, "ether")),
+                need=str(Web3.from_wei(need, "ether")),
+            ) from exc
 
     def _sign(self, user_op: dict[str, Any]) -> str:
         packed = _to_packed(user_op)

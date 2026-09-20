@@ -7,6 +7,13 @@ from typing import Any
 from .client import CheckpointClient
 from .config import AppConfig
 
+# 0 = untouched open book, 2 = partially filled and still live on the UI.
+# Fully filled / cancelled (1, 3, …) are skipped.
+OPEN_OFFER_STATUSES = frozenset({0, 2})
+OFFER_WAIT_SECONDS = 300.0
+OFFER_POLL_MIN_SEC = 8.0
+OFFER_POLL_MAX_SEC = 15.0
+
 
 @dataclass(frozen=True)
 class Offer:
@@ -15,16 +22,22 @@ class Offer:
     points_amount: int  # raw 18-decimal style
     price: int          # total USDC raw (6-dec style from API)
     collateral_amount: int
-    filled_amount: int
+    filled_amount: int  # USDC already taken, same units as price
     status: int
     account: str
 
     @property
     def remaining_price(self) -> int:
-        # API price is full offer notional; if partially filled, scale roughly
+        """USDC still fillable. HAR: filledAmount is USDC, not points."""
+        if self.price <= 0:
+            return 0
+        if 0 <= self.filled_amount <= self.price:
+            return self.price - self.filled_amount
         if self.points_amount <= 0:
-            return self.price
+            return 0
         remaining_pts = max(self.points_amount - self.filled_amount, 0)
+        if remaining_pts <= 0:
+            return 0
         if remaining_pts == self.points_amount:
             return self.price
         return int(self.price * remaining_pts / self.points_amount)
@@ -33,38 +46,97 @@ class Offer:
         return Decimal(self.remaining_price) / Decimal(10 ** decimals)
 
 
+@dataclass(frozen=True)
+class MarketInfo:
+    points_id: int
+    active_offers: int
+    best_price: str = "0"
+
+
+def offers_from_payload(data: dict[str, Any], *, points_id: int) -> list[Offer]:
+    """Parse /market/{id}/offers JSON. Live book is status 0 and 2."""
+    offers: list[Offer] = []
+    for row in data.get("offers") or []:
+        try:
+            status = int(row.get("status", 0))
+            if status not in OPEN_OFFER_STATUSES:
+                continue
+            points_amount = int(row.get("pointsAmount") or 0)
+            filled = int(row.get("filledAmount") or 0)
+            price = int(row.get("price") or 0)
+            if points_amount <= 0 or price <= 0:
+                continue
+            offer = Offer(
+                id=int(row["id"]),
+                points_id=int(row.get("pointsId") or points_id),
+                points_amount=points_amount,
+                price=price,
+                collateral_amount=int(row.get("collateralAmount") or 0),
+                filled_amount=filled,
+                status=status,
+                account=str(row.get("account") or ""),
+            )
+            if offer.remaining_price <= 0:
+                continue
+            offers.append(offer)
+        except (KeyError, TypeError, ValueError):
+            continue
+    offers.sort(key=lambda o: o.remaining_price)
+    return offers
+
+
 def fetch_offers(client: CheckpointClient, cfg: AppConfig, points_id: int | None = None) -> list[Offer]:
     pid = cfg.points_id if points_id is None else points_id
     url = f"{cfg.market_api}/market/{pid}/offers?limit=500"
     resp = client.http_get(url)
     resp.raise_for_status()
     data = resp.json()
-    offers: list[Offer] = []
-    for row in data.get("offers") or []:
+    if not isinstance(data, dict):
+        return []
+    return offers_from_payload(data, points_id=pid)
+
+
+def markets_from_overview(data: dict[str, Any]) -> list[MarketInfo]:
+    out: list[MarketInfo] = []
+    for row in data.get("markets") or []:
+        if not isinstance(row, dict):
+            continue
         try:
-            status = int(row.get("status", 0))
-            if status != 0:
-                continue
-            points_amount = int(row.get("pointsAmount") or 0)
-            filled = int(row.get("filledAmount") or 0)
-            if points_amount <= 0 or filled >= points_amount:
-                continue
-            offers.append(
-                Offer(
-                    id=int(row["id"]),
-                    points_id=int(row.get("pointsId") or pid),
-                    points_amount=points_amount,
-                    price=int(row.get("price") or 0),
-                    collateral_amount=int(row.get("collateralAmount") or 0),
-                    filled_amount=filled,
-                    status=status,
-                    account=str(row.get("account") or ""),
+            out.append(
+                MarketInfo(
+                    points_id=int(row["pointsId"]),
+                    active_offers=int(row.get("activeOffers") or 0),
+                    best_price=str(row.get("bestPrice") or "0"),
                 )
             )
         except (KeyError, TypeError, ValueError):
             continue
-    offers.sort(key=lambda o: o.remaining_price)
-    return offers
+    return out
+
+
+def rank_markets(
+    markets: list[MarketInfo],
+    *,
+    preferred_id: int,
+) -> list[MarketInfo]:
+    """Checkpoint XP first (own points), then fattest live books."""
+    preferred = [m for m in markets if m.points_id == preferred_id]
+    rest = [m for m in markets if m.points_id != preferred_id]
+    rest.sort(key=lambda m: (-m.active_offers, m.points_id))
+    return preferred + rest
+
+
+def list_markets(client: CheckpointClient, cfg: AppConfig) -> list[MarketInfo]:
+    try:
+        data = market_overview(client, cfg)
+    except Exception:
+        return [MarketInfo(points_id=int(cfg.points_id), active_offers=1)]
+    if not isinstance(data, dict):
+        return [MarketInfo(points_id=int(cfg.points_id), active_offers=1)]
+    ranked = rank_markets(markets_from_overview(data), preferred_id=int(cfg.points_id))
+    if ranked:
+        return ranked
+    return [MarketInfo(points_id=int(cfg.points_id), active_offers=1)]
 
 
 def pick_fill_targets(
