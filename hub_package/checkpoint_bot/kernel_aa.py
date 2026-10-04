@@ -225,22 +225,36 @@ class KernelAccount:
         # Bundler allowlists Origin https://checkpoint.exchange.
         # Extra Client-Hints from the Checkpoint session 400 the bundler;
         # keep a dedicated session. Proxy first, then retry direct (1.6.6 path).
-        resp = self._post_rpc(method, params)
-        if resp.status_code >= 400 and self.client.proxy and not self._dropped_proxy:
-            self._dropped_proxy = True
-            self._zd.proxies.clear()
+        last_exc: Exception | None = None
+        for attempt in range(4):
             resp = self._post_rpc(method, params)
-        if resp.status_code >= 400:
-            snippet = _rpc_snippet(resp)
-            if "allowlist" in snippet.lower():
-                raise RuntimeError(f"zerodev HTTP {resp.status_code} allowlist {method}")
-            raise RuntimeError(f"zerodev HTTP {resp.status_code} {method}: {snippet}"[:240])
-        body = resp.json()
-        if body.get("error"):
-            err = body["error"]
-            msg = err.get("message") if isinstance(err, dict) else str(err)
-            raise RuntimeError(f"zerodev {method}: {scrub_secrets(str(msg))}"[:240])
-        return body.get("result")
+            if resp.status_code >= 400 and self.client.proxy and not self._dropped_proxy:
+                self._dropped_proxy = True
+                self._zd.proxies.clear()
+                resp = self._post_rpc(method, params)
+            snippet = _rpc_snippet(resp) if resp.status_code >= 400 else ""
+            rate_limited = resp.status_code == 429 or "rate limit" in snippet.lower()
+            if rate_limited and attempt < 3:
+                time.sleep(1.2 * (attempt + 1))
+                continue
+            if resp.status_code >= 400:
+                if "allowlist" in snippet.lower():
+                    raise RuntimeError(f"zerodev HTTP {resp.status_code} allowlist {method}")
+                raise RuntimeError(f"zerodev HTTP {resp.status_code} {method}: {snippet}"[:240])
+            body = resp.json()
+            if body.get("error"):
+                err = body["error"]
+                msg = err.get("message") if isinstance(err, dict) else str(err)
+                text = scrub_secrets(str(msg))
+                if "rate limit" in text.lower() and attempt < 3:
+                    time.sleep(1.2 * (attempt + 1))
+                    last_exc = RuntimeError(f"zerodev {method}: {text}"[:240])
+                    continue
+                raise RuntimeError(f"zerodev {method}: {text}"[:240])
+            return body.get("result")
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(f"zerodev {method}: rate limited")
 
     def _eth_call(self, to: str, data: bytes) -> bytes:
         raw = self.client.w3.eth.call({"to": Web3.to_checksum_address(to), "data": data})

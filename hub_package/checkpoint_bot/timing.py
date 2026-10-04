@@ -45,21 +45,21 @@ def roll_session() -> SessionStyle:
     """Pick a human-ish tempo and jitter every bound."""
     family = random.choice(("snappy", "steady", "leisure", "bursty"))
     if family == "snappy":
-        action_lo, action_hi = 3.5, 9.0
-        start_lo, start_hi = 0.2, 2.8
-        think_p = 0.06
+        action_lo, action_hi = 0.4, 1.6
+        start_lo, start_hi = 0.0, 0.25
+        think_p = 0.02
     elif family == "leisure":
-        action_lo, action_hi = 11.0, 28.0
-        start_lo, start_hi = 2.0, 9.5
-        think_p = 0.22
+        action_lo, action_hi = 0.8, 2.4
+        start_lo, start_hi = 0.05, 0.4
+        think_p = 0.04
     elif family == "bursty":
-        action_lo, action_hi = 2.0, 22.0
-        start_lo, start_hi = 0.4, 7.0
-        think_p = 0.18
+        action_lo, action_hi = 0.3, 2.0
+        start_lo, start_hi = 0.0, 0.35
+        think_p = 0.03
     else:
-        action_lo, action_hi = 6.0, 16.0
-        start_lo, start_hi = 0.6, 5.5
-        think_p = 0.12
+        action_lo, action_hi = 0.5, 1.8
+        start_lo, start_hi = 0.0, 0.3
+        think_p = 0.03
 
     def j(a: float, b: float) -> tuple[float, float]:
         lo = max(0.05, a * random.uniform(0.75, 1.15))

@@ -12,6 +12,7 @@ from .auth_siwe import siwe_login
 from .client import CheckpointClient
 from .config import AppConfig
 from .deposit import try_deposit
+from .faucet import FaucetEligibilityError
 from .kernel_aa import KernelAccount, LowGasError
 from .market import create_offer
 from .market_api import (
@@ -112,6 +113,7 @@ class WalletActionRunner:
         cancel_check: Callable[[], None] | None = None,
         session: SessionStyle | None = None,
         offer_wait_seconds: float | None = None,
+        fund_gas: Callable[[], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
@@ -121,6 +123,7 @@ class WalletActionRunner:
         self.capsolver_api_key = capsolver_api_key
         self.cancel_check = cancel_check
         self.session = session
+        self.fund_gas = fund_gas
         self.kernel: KernelAccount | None = None
         self.offer_wait_seconds = (
             OFFER_WAIT_SECONDS if offer_wait_seconds is None else float(offer_wait_seconds)
@@ -604,7 +607,18 @@ class WalletActionRunner:
                     fill_data=fill_data,
                     mint_data=mint_data,
                 )
-                tx_hash = kernel.send_calls(calls)
+                try:
+                    tx_hash = kernel.send_calls(calls)
+                except Exception as send_exc:
+                    if (
+                        _is_low_gas(send_exc)
+                        and not _is_erc20_usdc(send_exc)
+                        and self.fund_gas
+                        and self.fund_gas()
+                    ):
+                        tx_hash = kernel.send_calls(calls)
+                    else:
+                        raise
                 if batched_mint:
                     usdc_raw += mint_units
                     self.emit(
@@ -640,6 +654,8 @@ class WalletActionRunner:
                         },
                     }
                 )
+            except FaucetEligibilityError:
+                raise
             except Exception as exc:
                 if _is_low_gas(exc) and not _is_erc20_usdc(exc):
                     self._skip_low_gas("fill", exc)

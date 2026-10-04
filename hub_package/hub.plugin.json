@@ -3,8 +3,8 @@
   "contract_version": "SH-SOFTWARE-0.6/5",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.7.20",
-  "description": "XP farm на Arbitrum Sepolia: кран QuickNode через Ads при нехватке газа, HTTP + Kernel fills. Mint USDC вместе с первой сделкой.",
+  "version": "1.7.23",
+  "description": "XP farm на Arbitrum Sepolia: при нехватке газа — свап на Ethereum если нет истории txs, затем кран QuickNode в Ads, HTTP + Kernel fills.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
@@ -61,7 +61,8 @@
       "local.adspower.com"
     ],
     "chains": [
-      421614
+      421614,
+      1
     ],
     "financial_risk": "testnet",
     "browser": true,
@@ -71,7 +72,7 @@
     {
       "id": "farm",
       "name": "Работа",
-      "description": "Если мало Sepolia ETH — кран QuickNode в Ads. Затем реф-цепь и Kernel fills.",
+      "description": "Если мало Sepolia ETH: при нужде маленький свап на Ethereum (история для QuickNode), затем кран в Ads, реф-цепь и Kernel fills.",
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
@@ -143,7 +144,7 @@
           "account_concurrency": {
             "type": "integer",
             "title": "Параллельные аккаунты",
-            "description": "Сколько аккаунтов одного реф-уровня сразу. Hub зажимает по числу выбранных. Потолок Soft Hub — 20 (30 без правки Hub нельзя).",
+            "description": "Сколько аккаунтов фармить сразу после регистрации. Hub зажимает по числу выбранных, потолок 20.",
             "default": 20,
             "minimum": 1,
             "maximum": 20,

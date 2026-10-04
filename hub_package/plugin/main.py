@@ -15,11 +15,11 @@ from checkpoint_bot.faucet import (
     FaucetEligibilityError,
     MAINNET_NEED_WEI,
     claim_sepolia_eth,
-    mainnet_eth_wei,
+    faucet_preflight,
     native_wei,
     needs_faucet,
-    needs_mainnet_for_faucet,
 )
+from checkpoint_bot.mainnet import activate_mainnet_history, mainnet_snapshot
 from checkpoint_bot.identity import BrowserIdentity, resolve_identity
 from checkpoint_bot.offer_pool import OfferPool
 from checkpoint_bot.referral import (
@@ -31,7 +31,6 @@ from checkpoint_bot.referral import (
 )
 from checkpoint_bot.timing import (
     account_start_delay,
-    between_levels_delay,
     parse_account_gap,
     pre_http_delay,
     roll_session,
@@ -63,6 +62,63 @@ RPC_FALLBACKS = [
     "https://arbitrum-sepolia-rpc.publicnode.com",
 ]
 _STAGE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_TERMINAL_ACCOUNT = frozenset(
+    {"succeeded", "partial", "failed", "skipped", "blocked", "cancelled"}
+)
+_PROGRESS_LOCK = threading.Lock()
+_LAST_PROGRESS: dict[str, float] = {}
+_TERMINAL_SENT: set[str] = set()
+
+
+def _reset_account_lifecycle() -> None:
+    with _PROGRESS_LOCK:
+        _LAST_PROGRESS.clear()
+        _TERMINAL_SENT.clear()
+
+
+def _account_state(
+    context: HubContext,
+    account_id: str,
+    *,
+    status: str,
+    stage: str,
+    progress: float | None = None,
+    message: str = "",
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Hub kills the run after 3 invalid frames (progress back / already terminal)."""
+    if status == "needs_attention":
+        status = "failed"
+        if not _STAGE_RE.fullmatch(stage):
+            stage = "external_outcome_unknown"
+    with _PROGRESS_LOCK:
+        if account_id in _TERMINAL_SENT:
+            return
+        if progress is not None:
+            try:
+                value = round(float(progress), 3)
+            except (TypeError, ValueError):
+                value = _LAST_PROGRESS.get(account_id, 0.0)
+            value = min(1.0, max(0.0, value))
+            last = _LAST_PROGRESS.get(account_id, 0.0)
+            if value < last:
+                value = last
+            _LAST_PROGRESS[account_id] = value
+            progress = value
+        if status in _TERMINAL_ACCOUNT:
+            _TERMINAL_SENT.add(account_id)
+    try:
+        context.account_state(
+            account_id,
+            status=status,
+            stage=stage,
+            progress=progress,
+            message=message,
+            data=data,
+        )
+    except Exception:
+        with _PROGRESS_LOCK:
+            _TERMINAL_SENT.discard(account_id)
 
 
 def run(context: HubContext) -> dict[str, Any]:
@@ -70,6 +126,7 @@ def run(context: HubContext) -> dict[str, Any]:
     if mode is None:
         raise ValueError(f"unsupported_action:{context.action_id}")
 
+    _reset_account_lifecycle()
     cfg = _build_config(context)
     offer_pool = OfferPool()
     lock = threading.Lock()
@@ -114,6 +171,7 @@ def run(context: HubContext) -> dict[str, Any]:
             "accounts": len(context.accounts),
             "levels": len(levels),
             "account_concurrency": workers,
+            "farm_parallel": "all_after_register" if mode == "daily" else "flat",
             "auto_register": mode == "daily",
             "adspower": mode == "daily",
             "http_farm": mode == "daily",
@@ -132,12 +190,82 @@ def run(context: HubContext) -> dict[str, Any]:
             data={"ads_chrome": "faucet_only"},
         )
 
-    def worker(hub_account: HubAccount) -> str:
+    def _map(fn, accounts) -> None:
+        if hasattr(context, "map_accounts"):
+            context.map_accounts(fn, accounts=accounts)
+        else:
+            for account in accounts:
+                context.check_cancelled()
+                fn(account)
+
+    def _finish_worker(status: str, meta: dict[str, bool]) -> str:
+        with lock:
+            counters[status] = counters.get(status, 0) + 1
+            if meta.get("registered"):
+                counters["registered"] = counters.get("registered", 0) + 1
+            if meta.get("referral_linked"):
+                counters["referral_linked"] = counters.get("referral_linked", 0) + 1
+            if meta.get("referral_mismatch"):
+                counters["referral_mismatch"] = counters.get("referral_mismatch", 0) + 1
+        return status
+
+    def _crash_worker() -> str:
+        with lock:
+            counters["failed"] = counters.get("failed", 0) + 1
+        return "failed"
+
+    register_failed: set[str] = set()
+
+    def register_worker(hub_account: HubAccount) -> str:
         if hub_account.id in blocked_pre:
             return "blocked"
         try:
+            status, meta = _run_account(
+                context,
+                hub_account,
+                cfg=cfg,
+                mode=mode,
+                offer_pool=offer_pool,
+                counters=counters,
+                counters_lock=lock,
+                session=None,
+                identity=identities.get(hub_account.id),
+                phase="register",
+            )
+        except CancelledError:
+            with lock:
+                counters["cancelled"] = counters.get("cancelled", 0) + 1
+            raise
+        except Exception:
+            _account_state(
+                context,
+                hub_account.id,
+                status="failed",
+                stage="automation_failed",
+                message="Ошибка регистрации аккаунта",
+            )
+            register_failed.add(hub_account.id)
+            return _crash_worker()
+        if status == "failed":
+            register_failed.add(hub_account.id)
+            return _finish_worker(status, meta)
+        with lock:
+            if meta.get("registered"):
+                counters["registered"] = counters.get("registered", 0) + 1
+            if meta.get("referral_linked"):
+                counters["referral_linked"] = counters.get("referral_linked", 0) + 1
+            if meta.get("referral_mismatch"):
+                counters["referral_mismatch"] = counters.get("referral_mismatch", 0) + 1
+        return status
+
+    def farm_worker(hub_account: HubAccount) -> str:
+        if hub_account.id in blocked_pre:
+            return "blocked"
+        if hub_account.id in register_failed:
+            return "failed"
+        finished = False
+        try:
             session = roll_session()
-            # Anti-sybil: unique cadence per account, not a user option.
             if mode == "daily":
                 account_start_delay(cancel_check=context.check_cancelled, style=session)
             else:
@@ -152,50 +280,60 @@ def run(context: HubContext) -> dict[str, Any]:
                 counters_lock=lock,
                 session=session,
                 identity=identities.get(hub_account.id),
+                phase="farm" if mode == "daily" else "all",
             )
+            finished = True
+            return _finish_worker(status, meta)
         except CancelledError:
+            _account_state(
+                context,
+                hub_account.id,
+                status="cancelled",
+                stage="cancelled",
+                message="Остановлено",
+            )
             with lock:
                 counters["cancelled"] = counters.get("cancelled", 0) + 1
+            finished = True
             raise
         except Exception:
-            with lock:
-                counters["failed"] = counters.get("failed", 0) + 1
-            try:
-                context.account_state(
+            _account_state(
+                context,
+                hub_account.id,
+                status="failed",
+                stage="automation_failed",
+                message="Ошибка обработки аккаунта",
+            )
+            return _crash_worker()
+        finally:
+            if not finished:
+                _account_state(
+                    context,
                     hub_account.id,
                     status="failed",
                     stage="automation_failed",
-                    message="Ошибка обработки аккаунта",
+                    message="Ран оборвался без итогового статуса",
                 )
-            except Exception:
-                pass
-            return "failed"
-        with lock:
-            counters[status] = counters.get(status, 0) + 1
-            if meta.get("registered"):
-                counters["registered"] = counters.get("registered", 0) + 1
-            if meta.get("referral_linked"):
-                counters["referral_linked"] = counters.get("referral_linked", 0) + 1
-            if meta.get("referral_mismatch"):
-                counters["referral_mismatch"] = counters.get("referral_mismatch", 0) + 1
-        return status
 
-    for level_index, level in enumerate(levels):
-        context.check_cancelled()
-        if mode == "daily" and len(levels) > 1:
+    if mode == "daily":
+        for level_index, level in enumerate(levels):
+            context.check_cancelled()
             context.log(
-                f"Уровень реферальной цепи {level_index}",
-                data={"accounts": len(level), "level": level_index},
+                f"Регистрация, уровень {level_index}",
+                data={"accounts": len(level), "level": level_index, "phase": "register"},
             )
-        if hasattr(context, "map_accounts"):
-            context.map_accounts(worker, accounts=level)
-        else:
-            for account in level:
-                context.check_cancelled()
-                worker(account)
-        # Barrier: after parents finish, short random pause before children.
-        if mode == "daily" and level_index + 1 < len(levels):
-            between_levels_delay(cancel_check=context.check_cancelled)
+            _map(register_worker, level)
+        context.log(
+            "Фарм всех выбранных аккаунтов параллельно",
+            data={
+                "accounts": len(context.accounts),
+                "account_concurrency": workers,
+                "phase": "farm",
+            },
+        )
+        _map(farm_worker, context.accounts)
+    else:
+        _map(farm_worker, context.accounts)
 
     return {
         "total": counters["total"],
@@ -243,7 +381,7 @@ def _parent_for(context: HubContext, child: HubAccount) -> HubAccount | None:
 
 
 def _block_account(context: HubContext, account: HubAccount, message: str) -> None:
-    context.account_state(
+    _account_state(context,
         account.id,
         status="blocked",
         stage="preflight_blocked",
@@ -380,25 +518,32 @@ def _claim_gas_if_needed(
     start = native_wei(client)
     if not needs_faucet(start):
         context.log(
-            "ETH на газе хватает — кран пропускаем",
+            "ETH на газе хватает — кран и свап пропускаем",
             account_id=hub_account.id,
-            data={"eth": str(client.eth_balance())},
+            data={"eth_sepolia": str(client.eth_balance())},
         )
         return False
 
+    snap_wei: int | None = None
+    snap_nonce: int | None = None
     try:
-        mainnet_wei = mainnet_eth_wei(client.address, http=client.http)
+        snap = mainnet_snapshot(client.address)
+        snap_wei = snap.wei
+        snap_nonce = snap.nonce
     except Exception as exc:
         context.log(
             f"Ethereum mainnet не проверили ({_safe_error(exc)}) — кран всё равно попробуем",
             level="warning",
             account_id=hub_account.id,
         )
-        mainnet_wei = None
-    if mainnet_wei is not None and needs_mainnet_for_faucet(mainnet_wei):
+
+    decision = faucet_preflight(start, snap_wei, snap_nonce)
+    if decision == "skip":
+        return False
+    if decision == "ineligible":
         from web3 import Web3
 
-        have = str(Web3.from_wei(mainnet_wei, "ether"))
+        have = str(Web3.from_wei(int(snap_wei or 0), "ether"))
         need = str(Web3.from_wei(MAINNET_NEED_WEI, "ether"))
         msg = (
             f"На Ethereum mainnet недостаточно ETH для крана QuickNode: {have} "
@@ -408,11 +553,51 @@ def _claim_gas_if_needed(
             msg,
             level="error",
             account_id=hub_account.id,
-            data={"eth_mainnet": have, "need": need, "network": "ethereum"},
+            data={"eth_mainnet": have, "need": need, "network": "ethereum", "nonce": snap_nonce},
         )
         raise FaucetEligibilityError(msg)
+    if decision == "activate_then_faucet":
+        _account_state(
+            context,
+            hub_account.id,
+            status="running",
+            stage="mainnet",
+            progress=0.16,
+            message="Нет истории txs на Ethereum — делаю маленький свап для крана",
+        )
+        context.log(
+            "QuickNode не пускает кошельки без транзакций в Ethereum. "
+            "Делаю свап на пару долларов, оставляю ≥ 0.001 ETH.",
+            account_id=hub_account.id,
+            data={"eth_mainnet": str(snap_wei), "nonce": snap_nonce},
+        )
+        try:
+            after = activate_mainnet_history(
+                client.account,
+                log=lambda msg: context.log(msg, account_id=hub_account.id),
+                cancel=context.check_cancelled,
+            )
+            snap_wei, snap_nonce = after.wei, after.nonce
+            if after.wei is not None and after.wei < MAINNET_NEED_WEI:
+                from web3 import Web3
 
-    context.account_state(
+                have = str(Web3.from_wei(after.wei, "ether"))
+                msg = (
+                    f"После свапа на Ethereum осталось {have} ETH "
+                    f"(нужно ≥ 0.001). Кран не откроется."
+                )
+                context.log(msg, level="error", account_id=hub_account.id)
+                raise FaucetEligibilityError(msg)
+        except FaucetEligibilityError:
+            raise
+        except Exception as exc:
+            context.log(
+                f"Свап на Ethereum не удался ({_safe_error(exc)}) — кран всё равно попробуем",
+                level="warning",
+                account_id=hub_account.id,
+            )
+
+    _account_state(context,
         hub_account.id,
         status="running",
         stage="faucet",
@@ -451,6 +636,8 @@ def _claim_gas_if_needed(
         )
     except CancelledError:
         raise
+    except FaucetEligibilityError:
+        raise
     except AdsPowerError as exc:
         context.log(str(exc), level="warning", account_id=hub_account.id)
     except Exception as exc:
@@ -464,7 +651,7 @@ def _claim_gas_if_needed(
             ads.close()
         api_key = ""
 
-    context.account_state(
+    _account_state(context,
         hub_account.id,
         status="running",
         stage="funded",
@@ -503,7 +690,7 @@ def _ensure_registered(
     }
     session = make_session(account.proxy, identity.headers() if identity else None)
 
-    context.account_state(
+    _account_state(context,
         hub_account.id,
         status="running",
         stage="register",
@@ -547,7 +734,7 @@ def _ensure_registered(
     if hasattr(context, "protect_secret"):
         project_code = context.protect_secret(project_code)
 
-    context.account_state(
+    _account_state(context,
         hub_account.id,
         status="running",
         stage="referral",
@@ -631,15 +818,25 @@ def _run_account(
     counters_lock: threading.Lock,
     session=None,
     identity: BrowserIdentity | None = None,
+    phase: str = "all",
 ) -> tuple[str, dict[str, bool]]:
     context.check_cancelled()
-    context.account_state(
-        hub_account.id,
-        status="running",
-        stage="preflight",
-        progress=0.05,
-        message="Проверяем ключ, proxy и RPC",
-    )
+    if phase == "farm":
+        _account_state(context,
+            hub_account.id,
+            status="running",
+            stage="automation",
+            progress=0.15,
+            message="Запускаем фарм",
+        )
+    else:
+        _account_state(context,
+            hub_account.id,
+            status="running",
+            stage="preflight",
+            progress=0.05,
+            message="Проверяем ключ, proxy и RPC",
+        )
 
     write_may_have_happened = False
     cancelled: CancelledError | None = None
@@ -662,7 +859,7 @@ def _run_account(
             raise RuntimeError("bad_key: private key ≠ Hub address")
 
         # Work mode: auto-register new wallets along Hub referral topology first.
-        if mode == "daily":
+        if mode == "daily" and phase in {"all", "register"}:
             reg_meta = _ensure_registered(
                 context,
                 hub_account,
@@ -672,6 +869,8 @@ def _run_account(
                 identity=identity,
             )
             meta.update(reg_meta)
+            if phase == "register":
+                return "ok", meta
 
         if identity is None:
             identity = resolve_identity(child_address)
@@ -686,10 +885,18 @@ def _run_account(
                 data=identity.summary(),
             )
 
-        if mode == "daily":
-            meta["faucet_claimed"] = _claim_gas_if_needed(context, hub_account, client)
+        faucet_tried = False
 
-        context.account_state(
+        def fund_gas() -> bool:
+            nonlocal faucet_tried
+            if faucet_tried:
+                return False
+            faucet_tried = True
+            claimed = _claim_gas_if_needed(context, hub_account, client)
+            meta["faucet_claimed"] = bool(claimed)
+            return bool(claimed)
+
+        _account_state(context,
             hub_account.id,
             status="running",
             stage="automation",
@@ -765,7 +972,7 @@ def _run_account(
                 "session_plan": 0.36,
                 "mint_usdc": 0.40,
                 "approve_usdc": 0.45,
-                "fill": min(0.50 + 0.08 * max(event_stats["fills_ok"], 1), 0.90),
+                "fill": round(min(0.50 + 0.08 * max(event_stats["fills_ok"], 1), 0.90), 3),
                 "xp_report": 0.94,
                 "gas_check": 0.33,
             }
@@ -775,7 +982,7 @@ def _run_account(
                 if prog < max_progress:
                     prog = max_progress
                 max_progress = prog
-                context.account_state(
+                _account_state(context,
                     hub_account.id,
                     status="running",
                     stage=stage,
@@ -791,7 +998,7 @@ def _run_account(
                         f"Рынок {details.get('from_points_id')} пустой — "
                         f"идём на {details.get('to_points_id')}"
                     )
-                context.account_state(
+                _account_state(context,
                     hub_account.id,
                     status="running",
                     stage=action,
@@ -816,6 +1023,7 @@ def _run_account(
             capsolver_api_key=capsolver_key,
             cancel_check=context.check_cancelled,
             session=session,
+            fund_gas=fund_gas if mode == "daily" else None,
         ).run()
 
         if mode == "parse":
@@ -900,8 +1108,8 @@ def _run_account(
     except CancelledError as error:
         cancelled = error
         if write_may_have_happened:
-            terminal_status = "needs_attention"
-            terminal_stage = "needs_reconciliation"
+            terminal_status = "failed"
+            terminal_stage = "external_outcome_unknown"
             terminal_message = "Остановка после возможного write — сверьте chain"
         else:
             terminal_status = "cancelled"
@@ -910,8 +1118,8 @@ def _run_account(
     except Exception as exc:
         code = _classify_error(exc)
         if write_may_have_happened:
-            terminal_status = "needs_attention"
-            terminal_stage = "needs_reconciliation"
+            terminal_status = "failed"
+            terminal_stage = "external_outcome_unknown"
             terminal_message = "Возможный write без подтверждения — сверьте chain"
         elif code in {"missing_secret", "bad_key", "wrong_chain", "low_gas", "blocked"}:
             terminal_status = "blocked"
@@ -963,7 +1171,7 @@ def _run_account(
     finally:
         capsolver_key = ""
 
-    context.account_state(
+    _account_state(context,
         hub_account.id,
         status=terminal_status,
         stage=terminal_stage,

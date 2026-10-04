@@ -283,7 +283,7 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertFalse(needs_mainnet_for_faucet(MAINNET_NEED_WEI))
         self.assertEqual(MAINNET_NEED_WEI, 10**15)
 
-    def test_manifest_1_7_20_ads_faucet(self) -> None:
+    def test_manifest_1_7_23_ads_faucet(self) -> None:
         import json
         from pathlib import Path
 
@@ -291,8 +291,8 @@ class AdsPowerSafetyTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[1] / "hub_package"
         manifest = json.loads((root / "hub.plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.7.20")
-        self.assertEqual(__version__, "1.7.20")
+        self.assertEqual(manifest["version"], "1.7.23")
+        self.assertEqual(__version__, "1.7.23")
         self.assertIsInstance(__version__, str)
         self.assertEqual(manifest["contract_version"], "SH-SOFTWARE-0.6/5")
         self.assertEqual(manifest["compatibility"]["hub"], ">=0.6.22")
@@ -316,6 +316,8 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertNotIn("max_usdc_per_fill", props)
         self.assertNotIn("trades", props)
         self.assertIn("ethereum.publicnode.com", manifest["permissions"]["network"])
+        self.assertIn(1, manifest["permissions"]["chains"])
+        self.assertIn(421614, manifest["permissions"]["chains"])
         self.assertIn("adspower_profile", farm["resources"]["account"])
         self.assertIn("adspower_api", farm["resources"]["settings"])
         self.assertIn("adspower_profile", farm["permissions"]["secrets"])
@@ -336,6 +338,21 @@ class AdsPowerSafetyTests(unittest.TestCase):
         actions = (root / "checkpoint_bot" / "actions.py").read_text(encoding="utf-8")
         self.assertIn("offer_switch", actions)
         self.assertIn("list_markets", actions)
+        self.assertIn("all_after_register", main)
+        self.assertIn('phase="register"', main)
+        self.assertIn("fund_gas", actions)
+        self.assertIn("_account_state", main)
+        self.assertIn("_TERMINAL_SENT", main)
+        self.assertIn("rate_limited", kernel)
+        faucet = (root / "checkpoint_bot" / "faucet.py").read_text(encoding="utf-8")
+        mainnet = (root / "checkpoint_bot" / "mainnet.py").read_text(encoding="utf-8")
+        self.assertIn("session.trust_env = False", mainnet)
+        self.assertIn("Always a direct session", faucet)
+        self.assertIn("established transaction history", faucet)
+        self.assertIn("faucet_preflight", faucet)
+        self.assertIn("ETH на газе хватает — кран и свап пропускаем", main)
+        self.assertIn("activate_then_faucet", main)
+        self.assertIn("swapExactETHForTokens", mainnet)
 
 
 if __name__ == "__main__":

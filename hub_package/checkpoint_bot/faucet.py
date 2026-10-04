@@ -18,6 +18,11 @@ import time
 from typing import Any, Callable
 
 from checkpoint_bot.client import CheckpointClient
+from checkpoint_bot.mainnet import (
+    activate_mainnet_history,
+    mainnet_snapshot,
+    needs_mainnet_history,
+)
 from checkpoint_bot.timing import sleep_jitter
 from plugin.adspower import AdsPowerClient
 
@@ -32,15 +37,10 @@ TRANSFER_WAIT_SEC = 150.0
 MAINNET_CHECK_SEC = 16.0
 AFTER_SEND_SETTLE_SEC = 8.0
 ONCHAIN_WAIT_SEC = 75.0
-MAINNET_RPCS = (
-    "https://ethereum.publicnode.com",
-    "https://cloudflare-eth.com",
-    "https://eth.llamarpc.com",
-)
 
 
 class FaucetEligibilityError(RuntimeError):
-    """EOA cannot pass QuickNode's Ethereum mainnet balance gate."""
+    """EOA cannot pass QuickNode's Ethereum mainnet balance / history gate."""
 
 
 def needs_faucet(wei: int, *, need_wei: int = GAS_NEED_WEI) -> bool:
@@ -51,36 +51,44 @@ def needs_mainnet_for_faucet(wei: int, *, need_wei: int = MAINNET_NEED_WEI) -> b
     return int(wei) < int(need_wei)
 
 
+def faucet_preflight(
+    sepolia_wei: int,
+    mainnet_wei: int | None,
+    mainnet_nonce: int | None,
+) -> str:
+    """Who needs the faucet cycle. Healthy wallets return 'skip' immediately.
+
+    skip                 — Sepolia gas already enough, Ads/swap never run
+    ineligible           — L1 ETH < 0.001, swap would not help QuickNode
+    activate_then_faucet — L1 ETH ok but nonce=0, need a tiny mainnet swap
+    faucet               — L1 ETH + history ok (or L1 unread), open Ads drip
+    """
+    if not needs_faucet(sepolia_wei):
+        return "skip"
+    if mainnet_wei is not None and needs_mainnet_for_faucet(mainnet_wei):
+        return "ineligible"
+    if (
+        mainnet_wei is not None
+        and mainnet_nonce is not None
+        and needs_mainnet_history(mainnet_nonce)
+    ):
+        return "activate_then_faucet"
+    return "faucet"
+
+
 def mainnet_eth_wei(
     address: str,
     *,
     http: Any | None = None,
     timeout: float = 12.0,
 ) -> int:
-    """Read Ethereum mainnet ETH without opening QuickNode."""
-    import requests
-    from web3 import Web3
+    """Read Ethereum mainnet ETH without opening QuickNode.
 
-    session = http if http is not None else requests.Session()
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "eth_getBalance",
-        "params": [Web3.to_checksum_address(address), "latest"],
-    }
-    last: Exception | None = None
-    for url in MAINNET_RPCS:
-        try:
-            resp = session.post(url, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            result = (resp.json() or {}).get("result")
-            if result in (None, ""):
-                raise RuntimeError("empty eth_getBalance")
-            return int(str(result), 16)
-        except Exception as exc:
-            last = exc
-            continue
-    raise RuntimeError(f"Не удалось прочитать ETH в Ethereum mainnet: {last}")
+    Always a direct session: account proxies lie or timeout on L1 RPCs.
+    (session.trust_env = False is in checkpoint_bot.mainnet)
+    """
+    del http
+    return mainnet_snapshot(address, timeout=timeout).wei
 
 
 def native_wei(client: CheckpointClient) -> int:
@@ -162,26 +170,26 @@ def _drive_drip(
     _dismiss_cookies(page, log=log, wait_sec=8.0)
     _wait_mainnet_check(page, cancel=cancel, log=log)
     if not _click_enabled_continue(page, cancel=cancel):
-        _raise_if_mainnet_gated(page)
+        _raise_if_faucet_gated(page)
         raise RuntimeError("Continue на кране так и не включился")
     log("Нажал Continue")
 
     if not _wait_bonus_or_error(page, cancel=cancel):
         _raise_if_rate_limited(page)
-        _raise_if_mainnet_gated(page)
+        _raise_if_faucet_gated(page)
         raise RuntimeError("После Continue не открылась страница 0.05 ETH")
     if "/transaction" not in _url(page):
         _wait_recaptcha_ready(page, cancel=cancel, log=log)
         log("Страница 0.05 ETH — жму Send to")
         if not _click_send_to(page):
-            _raise_if_mainnet_gated(page)
+            _raise_if_faucet_gated(page)
             raise RuntimeError("Не нашёл кнопку Send to (step-two-skip)")
         log("Нажал Send to. Если вылезла картинка reCAPTCHA — реши в окне Ads")
         sleep_jitter(AFTER_SEND_SETTLE_SEC * 0.6, AFTER_SEND_SETTLE_SEC, cancel_check=cancel)
 
     if not _wait_tx_or_error(page, cancel=cancel):
         _raise_if_rate_limited(page)
-        _raise_if_mainnet_gated(page)
+        _raise_if_faucet_gated(page)
         raise RuntimeError("QuickNode не открыл страницу транзакции после Send to")
     log("QuickNode принял drip — ждём Transfer Completed")
 
@@ -211,6 +219,17 @@ MAINNET_ERROR_MARKERS = (
 MAINNET_ERROR_MSG = (
     "QuickNode отказал: на адресе нет ETH в Ethereum mainnet "
     "(нужно ≥ 0.001 ETH в сети Ethereum, не Sepolia). Это антибот крана, не газ Checkpoint."
+)
+
+HISTORY_ERROR_MARKERS = (
+    "established transaction history",
+    "more established transaction",
+    "does not currently meet this criteria",
+)
+
+HISTORY_ERROR_MSG = (
+    "QuickNode отказал: на адресе нет истории транзакций в Ethereum. "
+    "Нужен хотя бы один свап/tx в сети Ethereum, и после него ≥ 0.001 ETH."
 )
 
 RATE_LIMIT_MARKERS = (
@@ -395,9 +414,23 @@ def _mainnet_gated(page: Any) -> bool:
     return _visible_has(page, MAINNET_ERROR_MARKERS)
 
 
+def _history_gated(page: Any) -> bool:
+    return _visible_has(page, HISTORY_ERROR_MARKERS)
+
+
+def _raise_if_history_gated(page: Any) -> None:
+    if _history_gated(page):
+        raise FaucetEligibilityError(HISTORY_ERROR_MSG)
+
+
 def _raise_if_mainnet_gated(page: Any) -> None:
     if _visible_has(page, MAINNET_ERROR_MARKERS):
-        raise RuntimeError(MAINNET_ERROR_MSG)
+        raise FaucetEligibilityError(MAINNET_ERROR_MSG)
+
+
+def _raise_if_faucet_gated(page: Any) -> None:
+    _raise_if_history_gated(page)
+    _raise_if_mainnet_gated(page)
 
 
 def _rate_limited(page: Any) -> bool:
@@ -446,10 +479,12 @@ def _wait_mainnet_check(
     while time.monotonic() < deadline:
         cancel()
         _dismiss_cookies(page, log=log, wait_sec=0.2)
+        if _history_gated(page):
+            raise FaucetEligibilityError(HISTORY_ERROR_MSG)
         if _visible_has(page, MAINNET_ERROR_MARKERS):
-            raise RuntimeError(MAINNET_ERROR_MSG)
+            raise FaucetEligibilityError(MAINNET_ERROR_MSG)
         time.sleep(0.45)
-    _raise_if_mainnet_gated(page)
+    _raise_if_faucet_gated(page)
 
 
 def _wait_bonus_or_error(page: Any, *, cancel: Callable[[], None]) -> bool:
@@ -462,7 +497,11 @@ def _wait_bonus_or_error(page: Any, *, cancel: Callable[[], None]) -> bool:
         body = _page_body(page)
         if "choose your amount" in body or "send to" in body:
             return True
-        if _visible_has(page, MAINNET_ERROR_MARKERS) or _visible_has(page, RATE_LIMIT_MARKERS):
+        if (
+            _history_gated(page)
+            or _visible_has(page, MAINNET_ERROR_MARKERS)
+            or _visible_has(page, RATE_LIMIT_MARKERS)
+        ):
             return False
         time.sleep(0.45)
     return "/bonus" in _url(page) or "/transaction" in _url(page)
@@ -477,7 +516,11 @@ def _wait_tx_or_error(page: Any, *, cancel: Callable[[], None]) -> bool:
         body = _page_body(page)
         if "transaction completed" in body or "transfer completed" in body:
             return True
-        if _visible_has(page, RATE_LIMIT_MARKERS) or _visible_has(page, MAINNET_ERROR_MARKERS):
+        if (
+            _visible_has(page, RATE_LIMIT_MARKERS)
+            or _history_gated(page)
+            or _visible_has(page, MAINNET_ERROR_MARKERS)
+        ):
             return False
         time.sleep(0.5)
     return "/transaction" in _url(page)
