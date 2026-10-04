@@ -283,7 +283,7 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertFalse(needs_mainnet_for_faucet(MAINNET_NEED_WEI))
         self.assertEqual(MAINNET_NEED_WEI, 10**15)
 
-    def test_manifest_1_7_23_ads_faucet(self) -> None:
+    def test_manifest_1_7_24_ads_faucet(self) -> None:
         import json
         from pathlib import Path
 
@@ -291,8 +291,8 @@ class AdsPowerSafetyTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[1] / "hub_package"
         manifest = json.loads((root / "hub.plugin.json").read_text())
-        self.assertEqual(manifest["version"], "1.7.23")
-        self.assertEqual(__version__, "1.7.23")
+        self.assertEqual(manifest["version"], "1.7.24")
+        self.assertEqual(__version__, "1.7.24")
         self.assertIsInstance(__version__, str)
         self.assertEqual(manifest["contract_version"], "SH-SOFTWARE-0.6/5")
         self.assertEqual(manifest["compatibility"]["hub"], ">=0.6.22")
@@ -353,6 +353,9 @@ class AdsPowerSafetyTests(unittest.TestCase):
         self.assertIn("ETH на газе хватает — кран и свап пропускаем", main)
         self.assertIn("activate_then_faucet", main)
         self.assertIn("swapExactETHForTokens", mainnet)
+        self.assertIn("DailyActionCap", main)
+        self.assertIn("DAILY_ACTION_LIMIT", main)
+        self.assertNotIn("target_fills * 12", actions)
 
 
 if __name__ == "__main__":

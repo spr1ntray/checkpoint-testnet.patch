@@ -11,6 +11,7 @@ from web3 import Web3
 from .auth_siwe import siwe_login
 from .client import CheckpointClient
 from .config import AppConfig
+from .daily_cap import DAILY_ACTION_LIMIT, DailyActionCap, DailyCapError
 from .deposit import try_deposit
 from .faucet import FaucetEligibilityError
 from .kernel_aa import KernelAccount, LowGasError
@@ -25,7 +26,7 @@ from .market_api import (
 )
 from .offer_pool import OfferPool
 from .rewards import fetch_rewards
-from .session_plan import plan_session
+from .session_plan import SessionPlan, plan_session, split_budget
 from .usdc import approve_market
 from .timing import SessionStyle, action_delay, sleep_jitter
 from .utils import scrub_secrets
@@ -114,6 +115,7 @@ class WalletActionRunner:
         session: SessionStyle | None = None,
         offer_wait_seconds: float | None = None,
         fund_gas: Callable[[], bool] | None = None,
+        daily_cap: DailyActionCap | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
@@ -124,6 +126,7 @@ class WalletActionRunner:
         self.cancel_check = cancel_check
         self.session = session
         self.fund_gas = fund_gas
+        self.daily_cap = daily_cap
         self.kernel: KernelAccount | None = None
         self.offer_wait_seconds = (
             OFFER_WAIT_SECONDS if offer_wait_seconds is None else float(offer_wait_seconds)
@@ -132,6 +135,11 @@ class WalletActionRunner:
     def _cancel(self) -> None:
         if self.cancel_check:
             self.cancel_check()
+
+    def _send_user_op(self, kernel: KernelAccount, calls: list[tuple[str, bytes, int]]) -> str:
+        if self.daily_cap is not None and not self.daily_cap.try_consume(self.client.address):
+            raise DailyCapError("daily action cap")
+        return kernel.send_calls(calls)
 
     def _best_rewards(self) -> Any:
         snaps = [fetch_rewards(self.client, self.cfg)]
@@ -463,7 +471,34 @@ class WalletActionRunner:
             return
 
         mint_units = c.to_usdc_units(cfg.mint_usdc_amount)
+        quota = (
+            self.daily_cap.remaining(c.address)
+            if self.daily_cap is not None
+            else DAILY_ACTION_LIMIT
+        )
+        if quota <= 0:
+            self.emit(
+                {
+                    "label": c.label,
+                    "address": c.address,
+                    "action": "fill",
+                    "status": "skipped",
+                    "tx_hash": None,
+                    "details": {
+                        "reason": "daily_cap",
+                        "limit": DAILY_ACTION_LIMIT,
+                        "hint": "Дневной лимит 12 действий исчерпан",
+                    },
+                }
+            )
+            return
         plan = plan_session(trades_min=cfg.trades_min, trades_max=cfg.trades_max)
+        if plan.trades > quota:
+            plan = SessionPlan(
+                budget_usdc=plan.budget_usdc,
+                trades=quota,
+                fills=split_budget(plan.budget_usdc, quota),
+            )
         self.emit(
             {
                 "label": c.label,
@@ -475,6 +510,8 @@ class WalletActionRunner:
                     "budget_usdc": str(plan.budget_usdc),
                     "trades": plan.trades,
                     "fills": [str(x) for x in plan.fills],
+                    "daily_quota": quota,
+                    "daily_limit": DAILY_ACTION_LIMIT,
                 },
             }
         )
@@ -482,7 +519,7 @@ class WalletActionRunner:
         filled = 0
         attempts = 0
         target_fills = plan.trades
-        max_attempts = target_fills * 12
+        max_attempts = min(quota, DAILY_ACTION_LIMIT)
         markets = list_markets(c, cfg)
         market_idx = 0
         dry_since: float | None = None
@@ -608,7 +645,24 @@ class WalletActionRunner:
                     mint_data=mint_data,
                 )
                 try:
-                    tx_hash = kernel.send_calls(calls)
+                    tx_hash = self._send_user_op(kernel, calls)
+                except DailyCapError:
+                    self.emit(
+                        {
+                            "label": c.label,
+                            "address": c.address,
+                            "action": "fill",
+                            "status": "skipped",
+                            "tx_hash": None,
+                            "details": {
+                                "reason": "daily_cap",
+                                "limit": DAILY_ACTION_LIMIT,
+                                "hint": "Дневной лимит 12 действий исчерпан",
+                            },
+                        }
+                    )
+                    halted = True
+                    break
                 except Exception as send_exc:
                     if (
                         _is_low_gas(send_exc)
@@ -616,7 +670,7 @@ class WalletActionRunner:
                         and self.fund_gas
                         and self.fund_gas()
                     ):
-                        tx_hash = kernel.send_calls(calls)
+                        tx_hash = self._send_user_op(kernel, calls)
                     else:
                         raise
                 if batched_mint:
@@ -654,6 +708,23 @@ class WalletActionRunner:
                         },
                     }
                 )
+            except DailyCapError:
+                self.emit(
+                    {
+                        "label": c.label,
+                        "address": c.address,
+                        "action": "fill",
+                        "status": "skipped",
+                        "tx_hash": None,
+                        "details": {
+                            "reason": "daily_cap",
+                            "limit": DAILY_ACTION_LIMIT,
+                            "hint": "Дневной лимит 12 действий исчерпан",
+                        },
+                    }
+                )
+                halted = True
+                break
             except FaucetEligibilityError:
                 raise
             except Exception as exc:

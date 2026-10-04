@@ -9,6 +9,7 @@ from eth_account import Account
 
 from checkpoint_bot.accounts import AccountConfig, normalize_private_key, normalize_proxy
 from checkpoint_bot.actions import WalletActionRunner
+from checkpoint_bot.daily_cap import DAILY_ACTION_LIMIT, DailyActionCap, state_path
 from checkpoint_bot.client import CheckpointClient
 from checkpoint_bot.config import AppConfig
 from checkpoint_bot.faucet import (
@@ -931,6 +932,10 @@ def _run_account(
                 if reason == "low_gas" or action == "gas_check":
                     event_stats["gas_blocked"] = True
                     last_skip_reason = f"Мало ETH: {details.get('eth')} (нужно {details.get('need') or '> 0'})"
+                elif reason == "daily_cap":
+                    last_skip_reason = (
+                        f"Дневной лимит {details.get('limit') or DAILY_ACTION_LIMIT} действий"
+                    )
                 elif reason in {"no_offers", "no suitable free offers"}:
                     event_stats["no_offers"] = True
                     last_skip_reason = "Нет подходящих offers в заданном диапазоне USDC"
@@ -1024,6 +1029,7 @@ def _run_account(
             cancel_check=context.check_cancelled,
             session=session,
             fund_gas=fund_gas if mode == "daily" else None,
+            daily_cap=DailyActionCap(state_path(getattr(context, "plugin_root", None))),
         ).run()
 
         if mode == "parse":
@@ -1223,7 +1229,7 @@ def _build_config(context: HubContext) -> AppConfig:
         points_id=5,
         trades_min=tmin,
         trades_max=tmax,
-        trades_per_day=tmax,
+        trades_per_day=DAILY_ACTION_LIMIT,
         trade_usdc_min=Decimal("0.01"),
         trade_usdc_max=max_usdc,
         mint_usdc_if_below=Decimal("50"),

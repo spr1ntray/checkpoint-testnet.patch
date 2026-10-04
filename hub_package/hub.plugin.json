@@ -3,8 +3,8 @@
   "contract_version": "SH-SOFTWARE-0.6/5",
   "id": "io.sprintray.checkpoint-testnet",
   "name": "Checkpoint Testnet",
-  "version": "1.7.23",
-  "description": "XP farm на Arbitrum Sepolia: при нехватке газа — свап на Ethereum если нет истории txs, затем кран QuickNode в Ads, HTTP + Kernel fills.",
+  "version": "1.7.24",
+  "description": "XP farm на Arbitrum Sepolia: кран QuickNode в Ads, HTTP + Kernel fills. Не больше 12 действий на аккаунт в день.",
   "author": "sprintray",
   "presentation": {
     "display_name": "Checkpoint Testnet",
@@ -72,7 +72,7 @@
     {
       "id": "farm",
       "name": "Работа",
-      "description": "Если мало Sepolia ETH: при нужде маленький свап на Ethereum (история для QuickNode), затем кран в Ads, реф-цепь и Kernel fills.",
+      "description": "Если мало Sepolia ETH: при нужде маленький свап на Ethereum, кран в Ads, реф-цепь и Kernel fills. Потолок 12 действий/аккаунт/день.",
       "risk": "testnet_write",
       "account_mode": "one_or_more",
       "permissions": {
@@ -158,7 +158,7 @@
           "trades_min": {
             "type": "integer",
             "title": "Количество fills",
-            "description": "Сколько сделок за аккаунт. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Checkpoint XP кап ~5/день; больше — объём.",
+            "description": "Сколько сделок за запуск. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Жёсткий потолок — 12 действий на аккаунт в день, включая неудачные UserOp.",
             "minimum": 5,
             "maximum": 10,
             "default": 5,
@@ -174,7 +174,7 @@
           "trades_max": {
             "type": "integer",
             "title": "Количество fills",
-            "description": "Сколько сделок за аккаунт. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Checkpoint XP кап ~5/день; больше — объём.",
+            "description": "Сколько сделок за запуск. Софт кинет случайное число в диапазоне и разобьёт бюджет 420–500 USDC. Жёсткий потолок — 12 действий на аккаунт в день, включая неудачные UserOp.",
             "minimum": 5,
             "maximum": 10,
             "default": 7,
